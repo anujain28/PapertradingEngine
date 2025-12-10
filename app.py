@@ -41,26 +41,23 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* 1. Main Page Background & Global Font Color (Retain requested White Background) */
+        /* 1. Main Page Background & Global Font Color */
         .stApp {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
         
-        /* 2. Sidebar Styling (Make background dark, text white) */
+        /* 2. Sidebar Styling (Dark Grey/Black for Sidebar) */
         section[data-testid="stSidebar"] {
-            background-color: #262730 !important; /* Dark Grey/Black for Sidebar */
+            background-color: #262730 !important; 
             color: #ffffff !important;
         }
-        /* Sidebar Text and Headings */
         section[data-testid="stSidebar"] * {
             color: #ffffff !important;
         }
-        /* Sidebar Radio/Select Text */
         section[data-testid="stSidebar"] div[role="radiogroup"] label {
             color: #ffffff !important;
         }
-
 
         /* 3. Force all text elements on Main Page to be black */
         p, h1, h2, h3, h4, h5, h6, span, div, label {
@@ -69,7 +66,7 @@ def apply_custom_style():
 
         /* 4. Metric Boxes - Light Grey Background */
         div[data-testid="metric-container"] {
-            background-color: #f0f2f6 !important; /* Light Grey */
+            background-color: #f0f2f6 !important;
             border: 1px solid #d1d5db;
             color: #000000 !important;
             border-radius: 8px;
@@ -85,7 +82,7 @@ def apply_custom_style():
 
         /* 6. Buttons - Light Grey Background */
         .stButton > button {
-            background-color: #e5e7eb !important; /* Light Grey */
+            background-color: #e5e7eb !important;
             color: #000000 !important;
             border: 1px solid #9ca3af !important;
         }
@@ -95,11 +92,28 @@ def apply_custom_style():
             border-color: #6b7280 !important;
         }
         
-        /* 7. Selectbox & Input Fields - Light Grey */
+        /* 7. Selectbox (The Box Itself) - Light Grey */
         div[data-baseweb="select"] > div {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
             border: 1px solid #d1d5db;
+        }
+
+        /* 8. DROPDOWN MENU FIX (The Popup List) - White Background */
+        div[data-baseweb="popover"] {
+            background-color: #ffffff !important;
+        }
+        div[data-baseweb="menu"] {
+            background-color: #ffffff !important;
+        }
+        /* Options inside the dropdown */
+        div[role="option"], li[role="option"] {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+        }
+        /* Hover effect on options */
+        div[role="option"]:hover, li[role="option"]:hover {
+            background-color: #f0f2f6 !important;
         }
         </style>
         """, unsafe_allow_html=True)
@@ -203,17 +217,16 @@ def show_crypto_page():
                         open=data['Open'], high=data['High'],
                         low=data['Low'], close=data['Close'])])
         
-        # --- CHART BACKGROUND BLACK (The Fix) ---
+        # Chart Black Background
         fig.update_layout(
             height=400, 
             margin=dict(l=0,r=0,t=0,b=0),
-            plot_bgcolor='black',      # Plot area background
-            paper_bgcolor='black',     # Outer chart area background
-            xaxis=dict(showgrid=True, gridcolor='#444444', color='white'), # Dark grid, white labels
-            yaxis=dict(showgrid=True, gridcolor='#444444', color='white'), # Dark grid, white labels
-            font=dict(color='white')   # General font for chart titles/legends
+            plot_bgcolor='black',      
+            paper_bgcolor='black',     
+            xaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
+            yaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
+            font=dict(color='white')   
         )
-        # --- END CHART FIX ---
 
         st.plotly_chart(fig, use_container_width=True)
     else:
