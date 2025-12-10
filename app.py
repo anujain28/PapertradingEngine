@@ -149,16 +149,28 @@ if "grid_bot_active" not in st.session_state:
 if "usd_inr" not in st.session_state:
     st.session_state["usd_inr"] = get_usd_inr_rate()
 
-# --- AI AUTO-PILOT STATE ---
+# --- FIXED AI AUTO-PILOT STATE INITIALIZATION ---
+# This block ensures 'active_grids' exists to prevent KeyError
 if "autopilot" not in st.session_state:
     st.session_state["autopilot"] = {
         "running": False,
         "currency": "USDT",
         "total_capital": 0.0,
         "cash_balance": 0.0,
-        "active_grids": [], # List of grid bot dicts
+        "active_grids": [], 
         "logs": []
     }
+else:
+    # MIGRATION FIX: If old state exists without 'active_grids', reset it
+    if "active_grids" not in st.session_state["autopilot"]:
+        st.session_state["autopilot"] = {
+            "running": False,
+            "currency": "USDT",
+            "total_capital": 0.0,
+            "cash_balance": 0.0,
+            "active_grids": [], 
+            "logs": []
+        }
 
 for key in ["engine_status", "engine_running", "loop_started", 
             "crypto_running", "crypto_status", "crypto_loop_started"]:
@@ -356,6 +368,7 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
             
+            ap["active_grids"] = [] # Ensure this list is initialized
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started. Capital: ${ap['total_capital']:.2f}")
             st.rerun()
             
@@ -367,10 +380,9 @@ def show_ai_autopilot_page():
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
         # Calculate Active Grids Value
-        invested_in_grids = sum([g['invest'] for g in ap['active_grids']])
+        # SAFE KEY ACCESS FIX HERE
+        invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         
-        # Current Value (Simplified: Cash + Current Value of Grids)
-        # Note: Ideally we check live PnL of each grid
         grid_current_val = 0.0
         for g in ap['active_grids']:
              cp = get_current_price(g['coin'])
