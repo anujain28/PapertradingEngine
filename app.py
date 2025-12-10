@@ -41,11 +41,25 @@ def apply_custom_style():
             margin: 0 auto;
         }
         /* Metrics / cards spacing */
-        .stMetric {
-            padding-top: 4px;
-            padding-bottom: 4px;
-        }
-        /* Tables */
+.stMetric {
+    background-color: #ffffff !important;
+    border: 2px solid #e0e7ff !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    margin-bottom: 12px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+}
+    .stMetric label {
+    font-size: 0.95rem !important;
+    color: #64748b !important;
+    font-weight: 600 !important;
+    margin-bottom: 6px !important;
+}
+    .stMetric [data-testid="stMetricValue"] {
+    font-size: 1.8rem !important;
+    color: #1e293b !important;
+    font-weight: 700 !important;
+}        /* Tables */
         div[data-testid="stDataFrame"] table {
             background-color: #ffffff !important;
             color: #0f172a !important;
