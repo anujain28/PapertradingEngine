@@ -288,23 +288,6 @@ def show_crypto_manual_bot_page():
     else:
         st.info("No active manual bots.")
 
-    # Live Grid Orders
-    st.markdown("### 📋 Live Grid Orders")
-    if active_bots:
-        for b_id, data in active_bots.items():
-            with st.expander(f"Orders for {b_id}"):
-                lower = data['lower']
-                upper = data['upper']
-                grids = data.get('grids', 5)
-                levels = np.linspace(lower, upper, grids)
-                orders = []
-                for lvl in levels:
-                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.4f}", "Status": "Open"})
-                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.4f}", "Status": "Open"})
-                st.table(pd.DataFrame(orders))
-    else:
-        st.caption("Start a bot to see grid levels.")
-
     st.markdown("---")
     st.subheader(f"📉 Asset Price Chart: {selected_coin}")
     t_col1, t_col2 = st.columns([3, 1])
@@ -334,7 +317,6 @@ def show_ai_autopilot_page():
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
     if not ap["running"]:
-        st.subheader("🛠️ Setup Auto-Pilot")
         c1, c2, c3 = st.columns(3)
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
@@ -353,12 +335,19 @@ def show_ai_autopilot_page():
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
             st.rerun()
     else:
-        # --- FIXED: STATUS BANNER ---
+        # STATUS BANNER
         st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
-        grid_current_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
+        # SAFE ACCESS TO 'invest'
+        invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
+        
+        grid_current_val = 0.0
+        for g in ap['active_grids']:
+             cp = get_current_price(g['coin'])
+             grid_current_val += (g['qty'] * cp)
+
         total_val_usd = ap['cash_balance'] + grid_current_val
         total_pnl_usd = total_val_usd - ap['total_capital']
         
@@ -370,26 +359,38 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # SCANNER
+        # SCANNER LOGIC
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             if not any(g['coin'] == scan_coin for g in ap['active_grids']):
                 cp = get_current_price(scan_coin)
-                # Random "Opportunity" for Demo
-                chance = random.randint(1, 10)
-                if chance > 8 and cp > 0: 
+                # Chance logic for simulation
+                if random.randint(1, 10) > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
+                    
+                    # GRID PARAMS GENERATION
+                    lower = cp * 0.95
+                    upper = cp * 1.05
+                    grid_levels = np.linspace(lower, upper, 5)
+                    grid_orders = []
+                    for lvl in grid_levels:
+                        if lvl < cp: grid_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
+                        else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
+
                     new_grid = {
-                        "coin": scan_coin, "entry": cp, "lower": cp*0.95, "upper": cp*1.05,
-                        "qty": invest_amt/cp, "invest": invest_amt, "grids": 5, "tp": 2.0, "sl": 3.0
+                        "coin": scan_coin, "entry": cp, 
+                        "lower": lower, "upper": upper,
+                        "qty": invest_amt/cp, "invest": invest_amt, 
+                        "grids": 5, "tp": 2.0, "sl": 3.0,
+                        "orders": grid_orders # SAVE ORDERS FOR DISPLAY
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
                     ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
-                elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral. Skipped.")
+                elif random.randint(1, 10) < 3:
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral.")
 
-        # --- FIXED: LOG DISPLAY ---
+        # LOGS
         st.subheader("🧠 AI Activity Log")
         if len(ap['logs']) > 5: ap['logs'] = ap['logs'][:5]
         for log in ap['logs']:
@@ -397,30 +398,47 @@ def show_ai_autopilot_page():
 
         st.markdown("---")
 
+        # ACTIVE GRIDS TABLE - RESTORED LAYOUT
         st.subheader(f"💼 Active Grids")
         if ap['active_grids']:
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
-            c1.markdown("**Asset**"); c2.markdown("**Range**"); c3.markdown("**Config**")
-            c4.markdown("**Inv**"); c5.markdown("**Val**"); c6.markdown("**PnL**"); c7.markdown("**Act**")
+            c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
+            c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
             
             for i, g in enumerate(ap['active_grids']):
                 cp = get_current_price(g['coin'])
                 curr_val = g['qty'] * cp
                 pnl = curr_val - g['invest']
                 
+                # Fetch Configs Safely
+                g_count = g.get('grids', 5)
+                g_tp = g.get('tp', 2.0)
+
                 c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
                 c1.write(g['coin'].replace("-USD",""))
-                c2.write(f"${g['lower']:.4f}-${g['upper']:.4f}")
-                c3.write(f"TP {g.get('tp',2.0)}%")
+                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}") # EXACT NUMBERS
+                c3.write(f"{g_count} Grids | TP {g_tp}%") # RESTORED CONFIG COLUMN
                 c4.write(f"${g['invest']:.2f}")
                 c5.write(f"${curr_val:.2f}")
                 c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
-                if c7.button("Stop", key=f"ap_stop_{i}"):
+                
+                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
                     ap['cash_balance'] += curr_val
                     ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": (pnl/g['invest'])*100})
                     ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
                     ap['active_grids'].pop(i)
                     st.rerun()
+            
+            # LIVE ORDERS TABLE
+            st.markdown("### 📋 Live Grid Orders")
+            for g in ap['active_grids']:
+                with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
+                    if 'orders' in g:
+                        ord_df = pd.DataFrame(g['orders'])
+                        ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
+                        st.dataframe(ord_df, use_container_width=True)
+        else:
+            st.info("Scanning for opportunities...")
         
         if st.button("⏹ Stop Engine"): 
             ap["running"] = False
@@ -452,7 +470,10 @@ def show_crypto_report_page():
         m1, m2 = st.columns(2)
         m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
         m2.metric("Trades", len(df))
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
     else:
         st.info("No closed trades.")
 
