@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
+import sqlite3
 import yfinance as yf
 import pytz
-import sqlite3
 
 # --- CONFIG ---
 IST = pytz.timezone("Asia/Kolkata")
@@ -12,14 +12,12 @@ DB_PATH = "paper_trades.db"
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* Global Styles */
+        /* Global & Sidebar */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
-        
-        /* Sidebar */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         
-        /* Sidebar Inputs (Black BG, White Text) */
+        /* Sidebar Inputs (Black BG, White Text, White Cursor) */
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
@@ -27,7 +25,7 @@ def apply_custom_style():
             border: 1px solid #555 !important;
         }
         
-        /* Metrics & Containers */
+        /* Metric Boxes */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important;
             border: 1px solid #d1d5db;
@@ -35,16 +33,30 @@ def apply_custom_style():
             padding: 10px;
         }
         
-        /* Expander & Table Fixes */
-        .main div[data-testid="stExpander"] details summary {
+        /* Buttons */
+        .stButton > button {
+            background-color: #e5e7eb !important; color: black !important; border: 1px solid #9ca3af !important;
+        }
+        
+        /* Dropdowns & Popovers (White BG, Black Text) */
+        div[data-baseweb="select"] > div { background-color: #ffffff !important; color: black !important; }
+        div[data-baseweb="popover"], div[data-baseweb="menu"] { background-color: #ffffff !important; }
+        div[role="option"] { background-color: #ffffff !important; color: black !important; }
+        
+        /* Expander Headers */
+        div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important; color: #000000 !important; border: 1px solid #dee2e6;
         }
-        .main div[data-testid="stExpander"] div[role="group"] { background-color: #ffffff !important; }
-        .main div[data-testid="stExpander"] table, td, th { color: #000000 !important; }
         
-        /* Dropdowns */
-        div[data-baseweb="select"] > div { background-color: #ffffff !important; color: black !important; }
-        div[role="option"] { background-color: #ffffff !important; color: black !important; }
+        /* Fix Sidebar Expanders to stay dark */
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
+            background-color: #333 !important; color: white !important;
+        }
+        
+        /* Force Tables to be Black Text on White */
+        div[data-testid="stDataFrame"], div[data-testid="stTable"] {
+            background-color: #ffffff !important; color: #000000 !important;
+        }
         </style>
         """, unsafe_allow_html=True)
 
@@ -64,10 +76,8 @@ def send_telegram_alert(message):
 def get_usd_inr_rate():
     try:
         data = yf.Ticker("INR=X").history(period="1d")
-        if not data.empty:
-            return data["Close"].iloc[-1]
-    except:
-        pass
+        if not data.empty: return data["Close"].iloc[-1]
+    except: pass
     return 84.0 
 
 def init_db():
