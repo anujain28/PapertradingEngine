@@ -3,278 +3,312 @@ import pandas as pd
 import requests
 import yfinance as yf
 import datetime as dt
-import plotly.graph_objects as go
+import pytz
 import time
 from streamlit_autorefresh import st_autorefresh
 
 # ---------------------------------------------------------
-# CONFIG & STATE INITIALIZATION
+# CONFIGURATION
 # ---------------------------------------------------------
 AIROBOTS_URL = "https://airobots.streamlit.app/"
+IST = pytz.timezone("Asia/Kolkata")
+MARKET_START = dt.time(9, 30)
+MARKET_END = dt.time(15, 30)
 
+# ---------------------------------------------------------
+# STATE MANAGEMENT
+# ---------------------------------------------------------
 def init_stock_state():
-    if "stock_autopilot" not in st.session_state:
-        st.session_state["stock_autopilot"] = {
+    if "stocks_engine" not in st.session_state:
+        st.session_state["stocks_engine"] = {
             "running": False,
-            "capital": 100000.0, # Default 1 Lakh INR
+            "capital": 100000.0,
             "cash": 100000.0,
-            "portfolio": [],     # List of holdings
+            "portfolio": [],     # Active holdings
             "history": [],       # Closed trades
-            "logs": [],
-            "last_scan_time": None
+            "logs": [],          # Activity logs
+            "top_10": [],        # Current best picks
+            "last_scan": None
         }
 
 # ---------------------------------------------------------
-# DATA FUNCTIONS
+# AI ALGORITHM & DATA FETCHING
 # ---------------------------------------------------------
-@st.cache_data(ttl=300)
-def fetch_top_stocks_from_ai():
-    """Scrapes the AI Robots app for the top table."""
+@st.cache_data(ttl=300) # Cache for 5 minutes
+def fetch_and_rank_stocks():
+    """
+    Scrapes AI Robots, normalizes data, and ranks stocks 
+    based on 'Maximum Profit in Minimum Time' (Velocity Score).
+    """
     try:
-        # User-Agent header often helps avoid bot detection
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(AIROBOTS_URL, headers=headers, timeout=10)
+        response = requests.get(AIROBOTS_URL, headers=headers, timeout=15)
         
-        if response.status_code == 200:
-            tables = pd.read_html(response.text)
-            if tables:
-                df = tables[0] # Assume first table is the main signal table
-                # Clean column names
-                df.columns = [c.lower() for c in df.columns]
-                return df.head(10) # Return top 10 for analysis
+        if response.status_code != 200:
+            return None
+
+        # Parse all tables found on the page
+        tables = pd.read_html(response.text)
+        if not tables:
+            return None
+
+        master_list = []
+        
+        # We assume tables might represent different timeframes (Intraday, BTST, etc.)
+        # We assign a 'Time Factor' (days) to normalize profit velocity.
+        # 1 = Intraday, 2 = BTST, 7 = Weekly, 30 = Monthly
+        
+        time_factors = [1, 2, 7, 30] 
+        
+        for i, df in enumerate(tables):
+            # Clean columns
+            df.columns = [str(c).lower().strip() for c in df.columns]
+            
+            # Identify key columns dynamically
+            symbol_col = next((c for c in df.columns if 'stock' in c or 'symbol' in c), None)
+            profit_col = next((c for c in df.columns if 'profit' in c or 'return' in c or 'tgt' in c), None)
+            
+            if symbol_col and profit_col:
+                # Determine timeframe weight (fallback to Monthly if many tables)
+                days = time_factors[i] if i < len(time_factors) else 30
+                
+                for _, row in df.iterrows():
+                    try:
+                        sym = str(row[symbol_col]).upper().replace(".NS", "").strip()
+                        # Extract numeric profit (handle strings like "10%")
+                        raw_profit = str(row[profit_col]).replace("%", "").strip()
+                        profit_pct = float(raw_profit) if raw_profit.replace('.', '', 1).isdigit() else 0.0
+                        
+                        # ALGO: Velocity Score = Profit % / Days
+                        # Penalize unrealistically high profits (>50% in intraday is likely an error/circuit)
+                        if profit_pct > 0 and profit_pct < 50:
+                            velocity = profit_pct / days
+                            master_list.append({
+                                "Symbol": sym,
+                                "Type": ["Intraday", "BTST", "Weekly", "Monthly"][i] if i < 4 else "Long Term",
+                                "Exp. Profit": profit_pct,
+                                "Velocity Score": velocity
+                            })
+                    except:
+                        continue
+
+        # Sort by Velocity Score (High to Low)
+        ranked_df = pd.DataFrame(master_list)
+        if not ranked_df.empty:
+            ranked_df = ranked_df.sort_values(by="Velocity Score", ascending=False).head(10)
+            return ranked_df.to_dict('records')
+            
     except Exception as e:
         return None
     return None
 
-def get_live_stock_price(ticker):
-    """Fetches live price from NSE (via Yahoo Finance). Adds .NS if missing."""
-    clean_ticker = ticker.upper().replace(".NS", "").strip()
-    ns_ticker = f"{clean_ticker}.NS"
+def get_live_price(ticker):
+    """Get live price for Indian stocks (adds .NS)"""
     try:
-        data = yf.Ticker(ns_ticker).history(period="1d")
+        sym = f"{ticker}.NS"
+        data = yf.Ticker(sym).history(period="1d")
         if not data.empty:
             return data["Close"].iloc[-1]
     except:
         pass
     return 0.0
 
-@st.cache_data(ttl=600)
-def get_stock_history(ticker, period="1mo"):
-    clean_ticker = ticker.upper().replace(".NS", "").strip() + ".NS"
-    try:
-        return yf.Ticker(clean_ticker).history(period=period)
-    except:
-        return None
-
 # ---------------------------------------------------------
-# PAGE: STOCKS DASHBOARD
+# TRADING ENGINE
 # ---------------------------------------------------------
-def show_stocks_dashboard():
-    st.title("📈 Indian Stocks Dashboard (NSE)")
-    st_autorefresh(interval=60000, key="stock_dash_refresh")
-
-    # 1. AI Analysis Table
-    st.subheader("🤖 AI Robots: Top Picks")
-    ai_data = fetch_top_stocks_from_ai()
+def run_trading_cycle():
+    se = st.session_state["stocks_engine"]
+    now = dt.datetime.now(IST)
     
-    if ai_data is not None:
-        st.dataframe(ai_data, use_container_width=True)
-        # Extract stock names for the dropdown
-        # Assuming the column name is 'symbol' or 'stock' or 'ticker'
-        possible_cols = [c for c in ai_data.columns if 'symbol' in c or 'stock' in c or 'name' in c]
-        stock_list = ai_data[possible_cols[0]].tolist() if possible_cols else ["RELIANCE", "TCS", "INFY", "HDFCBANK", "TATAMOTORS"]
+    # 1. Check Market Hours
+    if not (MARKET_START <= now.time() <= MARKET_END):
+        if now.second < 5: # Log once per minute to avoid spam
+            se["logs"].insert(0, f"[{now.strftime('%H:%M')}] 💤 Market Closed. Engine Sleeping.")
+        return
+
+    # 2. Fetch Top 10 "Bomb" Stocks
+    top_picks = fetch_and_rank_stocks()
+    if top_picks:
+        se["top_10"] = top_picks
     else:
-        st.warning("Could not fetch data from AI Robots. Using default Nifty 50 list.")
-        stock_list = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN", "TATAMOTORS", "ITC", "ADANIENT"]
+        # Fallback if scraping fails
+        return 
+
+    # 3. Buy Logic (Auto-Pilot)
+    # Strategy: Buy top 3 available bombs if we have cash
+    if se["running"] and se["cash"] > (se["capital"] * 0.1):
+        for stock in se["top_10"][:3]: # Focus on Top 3 highest velocity
+            sym = stock["Symbol"]
+            
+            # Check if already owned
+            if not any(p['symbol'] == sym for p in se['portfolio']):
+                price = get_live_price(sym)
+                
+                # Allocate 20% capital per trade
+                allocation = se["capital"] * 0.2
+                
+                if price > 0 and se["cash"] > allocation:
+                    qty = int(allocation / price)
+                    if qty > 0:
+                        cost = qty * price
+                        
+                        # Add to Portfolio
+                        se["portfolio"].append({
+                            "symbol": sym,
+                            "entry": price,
+                            "qty": qty,
+                            "target_pct": stock["Exp. Profit"], # AI Target
+                            "type": stock["Type"],
+                            "time": now.strftime('%H:%M')
+                        })
+                        se["cash"] -= cost
+                        se["logs"].insert(0, f"[{now.strftime('%H:%M')}] 💣 BOUGHT {sym} ({stock['Type']}): {qty} qty @ ₹{price}")
+
+    # 4. Sell Logic (Target or Stop Loss)
+    for i, pos in enumerate(se["portfolio"]):
+        curr = get_live_price(pos["symbol"])
+        if curr > 0:
+            pnl_pct = ((curr - pos["entry"]) / pos["entry"]) * 100
+            
+            # AI Exit Strategy:
+            # 1. Target Hit (based on AI Robots prediction)
+            # 2. Stop Loss (hardcoded at -2% for safety)
+            # 3. Intraday Close (if time > 3:15 PM)
+            
+            is_target = pnl_pct >= pos["target_pct"]
+            is_sl = pnl_pct <= -2.0
+            is_eod = (pos["type"] == "Intraday" and now.time() >= dt.time(15, 15))
+            
+            if is_target or is_sl or is_eod:
+                val = pos['qty'] * curr
+                pnl_amt = val - (pos['qty'] * pos['entry'])
+                
+                se["cash"] += val
+                se["history"].append({
+                    "date": now.strftime('%Y-%m-%d %H:%M'),
+                    "symbol": pos["symbol"],
+                    "pnl": pnl_amt,
+                    "roi": pnl_pct,
+                    "reason": "Target" if is_target else ("SL" if is_sl else "EOD")
+                })
+                
+                status = "✅ PROFIT" if pnl_amt > 0 else "❌ LOSS"
+                se["logs"].insert(0, f"[{now.strftime('%H:%M')}] {status}: Sold {pos['symbol']} @ ₹{curr} ({pnl_pct:.2f}%)")
+                se["portfolio"].pop(i)
+                
+                # Send Telegram (if configured in main app)
+                # We access main session state keys safely
+                if "tg_token" in st.session_state and st.session_state["tg_token"]:
+                    msg = (f"🚨 *Stock Trade Closed*\n"
+                           f"Symbol: {pos['symbol']}\n"
+                           f"Profit: ₹{pnl_amt:.2f} ({pnl_pct:.2f}%)\n"
+                           f"Reason: {'Target Hit' if is_target else 'Stop Loss'}")
+                    # We assume a send function exists or ignore if local
+                    pass 
+
+# ---------------------------------------------------------
+# UI PAGES
+# ---------------------------------------------------------
+def show_bomb_stocks_page():
+    st.title("💣 Bomb Stocks (Paper Trading)")
+    st.caption("AI-Selected High Velocity Stocks • Auto-Refreshes every 5 mins")
+    
+    # Refresh logic (300s = 5 mins)
+    st_autorefresh(interval=300_000, key="stock_refresh")
+    
+    # Run logic on every refresh
+    run_trading_cycle()
+    
+    se = st.session_state["stocks_engine"]
+    
+    # 1. Engine Control
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("🚀 Start Engine", type="primary", use_container_width=True):
+            se["running"] = True
+    with c2:
+        if st.button("⏹ Stop Engine", use_container_width=True):
+            se["running"] = False
+    
+    status_color = "green" if se["running"] else "red"
+    status_text = "RUNNING" if se["running"] else "STOPPED"
+    with c3:
+        st.markdown(f"**Status:** :{status_color}[{status_text}]")
+        st.markdown(f"**Cash:** ₹{se['cash']:,.2f} | **Invested:** ₹{se['capital'] - se['cash']:,.2f}")
 
     st.markdown("---")
 
-    # 2. Detailed Charting
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        selected_stock = st.selectbox("Select Stock to Analyze", stock_list)
-    with c2:
-        period = st.selectbox("Timeframe", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "ytd", "max"], index=2)
-
-    st.subheader(f"📊 {selected_stock} Price Chart")
-    
-    hist = get_stock_history(selected_stock, period)
-    if hist is not None and not hist.empty:
-        curr_price = hist['Close'].iloc[-1]
-        
-        # Color chart based on trend
-        start_price = hist['Close'].iloc[0]
-        color = 'green' if curr_price >= start_price else 'red'
-        
-        st.metric("Current Price", f"₹{curr_price:,.2f}", 
-                 delta=f"{(curr_price - start_price)/start_price * 100:.2f}%")
-
-        fig = go.Figure(data=[go.Candlestick(x=hist.index,
-                        open=hist['Open'], high=hist['High'],
-                        low=hist['Low'], close=hist['Close'])])
-        
-        fig.update_layout(
-            height=500, margin=dict(l=0,r=0,t=0,b=0),
-            plot_bgcolor='white', paper_bgcolor='white',
-            font=dict(color='black'),
-            xaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
-            yaxis=dict(showgrid=True, gridcolor='#f0f0f0')
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # 2. Top 10 Table
+    st.subheader("🎯 Top 10 'Bomb' Picks (Live AI)")
+    if se["top_10"]:
+        df = pd.DataFrame(se["top_10"])
+        # Formatting for display
+        df['Exp. Profit'] = df['Exp. Profit'].apply(lambda x: f"{x:.2f}%")
+        df['Velocity Score'] = df['Velocity Score'].apply(lambda x: f"{x:.2f}")
+        st.dataframe(df, use_container_width=True)
     else:
-        st.error(f"Data not available for {selected_stock}.NS")
+        st.info("Waiting for market data / AI scan...")
 
-# ---------------------------------------------------------
-# PAGE: STOCK AUTO-PILOT
-# ---------------------------------------------------------
-def show_stock_autopilot():
-    st.title("🚀 Stocks Auto-Pilot")
-    st.caption("Automatically buys the 'Top 5' stocks from AI Robots analysis and manages the portfolio.")
-    st_autorefresh(interval=30000, key="stock_ap_refresh")
-    
-    sap = st.session_state["stock_autopilot"]
+    st.markdown("---")
 
-    # --- CONFIGURATION ---
-    if not sap["running"]:
-        st.subheader("⚙️ Engine Configuration")
-        c1, c2 = st.columns(2)
-        capital = c1.number_input("Total Capital (INR)", min_value=10000.0, value=100000.0, step=5000.0)
+    # 3. Active Portfolio
+    st.subheader("💼 Active Portfolio")
+    if se["portfolio"]:
+        # Totals
+        cur_val_sum = 0
+        inv_sum = 0
         
-        if c2.button("🚀 Start Stock Engine", type="primary"):
-            sap["running"] = True
-            sap["capital"] = capital
-            sap["cash"] = capital
-            sap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started. Capital: ₹{capital:,.2f}")
-            st.rerun()
-    else:
-        # --- RUNNING STATS ---
-        st.success("✅ Stock Engine is Active: Scanning AI Robots...")
+        # Headers
+        h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1, 1, 1, 1, 1])
+        h1.write("**Stock**"); h2.write("**Buy Price**"); h3.write("**CMP**"); 
+        h4.write("**Qty**"); h5.write("**PnL**"); h6.write("**Action**")
         
-        # Calculate Metrics
-        invested_val = sum([p['qty'] * get_live_stock_price(p['symbol']) for p in sap['portfolio']])
-        total_val = sap['cash'] + invested_val
-        pnl = total_val - sap['capital']
-        
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Portfolio Value", f"₹{total_val:,.2f}")
-        m2.metric("Cash Balance", f"₹{sap['cash']:,.2f}")
-        m3.metric("Invested Amount", f"₹{invested_val:,.2f}")
-        m4.metric("Total PnL", f"₹{pnl:,.2f}", delta_color="normal")
-        
-        st.markdown("---")
-        
-        # --- ENGINE LOGIC ---
-        # 1. Fetch Top 5 if we have cash
-        if sap['cash'] > (sap['capital'] * 0.1): # Keep 10% buffer
-            ai_df = fetch_top_stocks_from_ai()
+        for i, p in enumerate(se["portfolio"]):
+            curr = get_live_price(p["symbol"])
+            invested = p["entry"] * p["qty"]
+            current = curr * p["qty"]
+            pnl = current - invested
             
-            if ai_df is not None and not ai_df.empty:
-                # Find column with symbol name
-                cols = [c for c in ai_df.columns if 'symbol' in c or 'stock' in c]
-                if cols:
-                    top_picks = ai_df[cols[0]].head(5).tolist()
-                    
-                    # Diversify: Allocate 20% of INITIAL capital per stock max
-                    max_alloc = sap['capital'] * 0.2
-                    
-                    for stock in top_picks:
-                        # Check if already owned
-                        owned = any(p['symbol'] == stock for p in sap['portfolio'])
-                        if not owned and sap['cash'] > max_alloc:
-                            price = get_live_stock_price(stock)
-                            if price > 0:
-                                qty = int(max_alloc / price)
-                                if qty > 0:
-                                    cost = qty * price
-                                    
-                                    # EXECUTE BUY
-                                    sap['portfolio'].append({
-                                        "symbol": stock,
-                                        "entry": price,
-                                        "qty": qty,
-                                        "date": dt.datetime.now()
-                                    })
-                                    sap['cash'] -= cost
-                                    sap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🟢 BOUGHT {stock}: {qty} qty @ ₹{price}")
-        
-        # 2. Check for Exits (Simple Trail or 2% Profit Simulation)
-        for i, pos in enumerate(sap['portfolio']):
-            curr = get_live_stock_price(pos['symbol'])
-            if curr > 0:
-                roi = (curr - pos['entry']) / pos['entry'] * 100
-                # Take profit at 2% or Stop Loss at 5% (Simulation Logic)
-                if roi >= 2.0 or roi <= -5.0:
-                    val = pos['qty'] * curr
-                    pnl_trade = val - (pos['qty'] * pos['entry'])
-                    
-                    # Close Trade
-                    sap['cash'] += val
-                    sap['history'].append({
-                        "date": dt.datetime.now(),
-                        "symbol": pos['symbol'],
-                        "pnl": pnl_trade,
-                        "roi": roi
-                    })
-                    sap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🔴 SOLD {pos['symbol']}: ROI {roi:.2f}% (PnL ₹{pnl_trade:.0f})")
-                    sap['portfolio'].pop(i)
-                    st.rerun()
-
-        # --- UI: ACTIVE POSITIONS ---
-        st.subheader("💼 Active Holdings")
-        if sap['portfolio']:
-            # Header
+            cur_val_sum += current
+            inv_sum += invested
+            
             c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1, 1, 1, 1])
-            c1.markdown("**Stock**"); c2.markdown("**Entry**"); c3.markdown("**CMP**")
-            c4.markdown("**Qty**"); c5.markdown("**PnL**"); c6.markdown("**Action**")
+            c1.write(f"{p['symbol']} ({p['type']})")
+            c2.write(f"₹{p['entry']:.1f}")
+            c3.write(f"₹{curr:.1f}")
+            c4.write(f"{p['qty']}")
+            c5.markdown(f":{'green' if pnl>0 else 'red'}[₹{pnl:.1f}]")
             
-            for i, p in enumerate(sap['portfolio']):
-                curr = get_live_stock_price(p['symbol'])
-                trade_val = curr * p['qty']
-                cost_val = p['entry'] * p['qty']
-                unrealized = trade_val - cost_val
-                
-                c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1, 1, 1, 1, 1])
-                c1.write(p['symbol'])
-                c2.write(f"₹{p['entry']:.1f}")
-                c3.write(f"₹{curr:.1f}")
-                c4.write(f"{p['qty']}")
-                
-                clr = "green" if unrealized >= 0 else "red"
-                c5.markdown(f":{clr}[₹{unrealized:.1f}]")
-                
-                if c6.button("Sell", key=f"sell_stk_{i}"):
-                    sap['cash'] += trade_val
-                    sap['history'].append({
-                        "date": dt.datetime.now(),
-                        "symbol": p['symbol'],
-                        "pnl": unrealized,
-                        "roi": (unrealized/cost_val)*100
-                    })
-                    sap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🔴 MANUAL SELL {p['symbol']}")
-                    sap['portfolio'].pop(i)
-                    st.rerun()
-        else:
-            st.info("Scanning for high-potential stocks...")
+            if c6.button("Sell", key=f"sell_bomb_{i}"):
+                se["cash"] += current
+                se["history"].append({"date": dt.datetime.now().strftime('%Y-%m-%d'), "symbol": p['symbol'], "pnl": pnl, "roi": 0})
+                se["logs"].insert(0, f"🔴 Manual Sell: {p['symbol']}")
+                se["portfolio"].pop(i)
+                st.rerun()
+        
+        # Summary
+        st.info(f"💰 **Total Invested:** ₹{inv_sum:,.0f}  |  **Current Value:** ₹{cur_val_sum:,.0f}  |  **Net PnL:** ₹{cur_val_sum - inv_sum:,.0f}")
+        
+    else:
+        st.write("No active trades.")
 
-        # Logs
-        with st.expander("📝 Activity Log", expanded=True):
-            for log in sap['logs'][:5]:
-                st.text(log)
-
-        if st.button("⏹ Stop Engine"):
-            sap["running"] = False
-            st.rerun()
+    # 4. Logs
+    with st.expander("📜 Activity Log", expanded=True):
+        for log in se["logs"][:10]:
+            st.text(log)
 
 # ---------------------------------------------------------
-# MAIN ENTRY POINT FOR APP.PY
+# MAIN ENTRY POINT
 # ---------------------------------------------------------
 def run_stocks_app():
     init_stock_state()
     
-    # Sub-Navigation for Stocks
-    page = st.sidebar.radio("Stocks Menu", ["Dashboard", "Auto-Pilot"])
+    # We use the sub-page logic passed from app.py, 
+    # but here we just handle the view rendering.
+    # The navigation is controlled by the Radio in app.py
+    # We just need to know WHICH page to render.
     
-    if page == "Dashboard":
-        show_stocks_dashboard()
-    elif page == "Auto-Pilot":
-        show_stock_autopilot()
+    # Since app.py calls this function, we can check st.session_state or just assume
+    # we render the main "Bomb Stocks" page here.
+    
+    show_bomb_stocks_page()
