@@ -41,54 +41,61 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* 1. Global Font Black & Background White */
+        /* 1. Main Page Background & Global Font Color (Retain requested White Background) */
         .stApp {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
         
-        /* 2. Force all text elements to be black */
+        /* 2. Sidebar Styling (Make background dark, text white) */
+        section[data-testid="stSidebar"] {
+            background-color: #262730 !important; /* Dark Grey/Black for Sidebar */
+            color: #ffffff !important;
+        }
+        /* Sidebar Text and Headings */
+        section[data-testid="stSidebar"] * {
+            color: #ffffff !important;
+        }
+        /* Sidebar Radio/Select Text */
+        section[data-testid="stSidebar"] div[role="radiogroup"] label {
+            color: #ffffff !important;
+        }
+
+
+        /* 3. Force all text elements on Main Page to be black */
         p, h1, h2, h3, h4, h5, h6, span, div, label {
             color: #000000 !important;
         }
 
-        /* 3. Metric Boxes - Light Grey Background */
+        /* 4. Metric Boxes - Light Grey Background */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important; /* Light Grey */
             border: 1px solid #d1d5db;
             color: #000000 !important;
             border-radius: 8px;
         }
-        /* Metric Labels & Values Black */
-        div[data-testid="metric-container"] label, 
-        div[data-testid="metric-container"] div {
-            color: #000000 !important;
-        }
 
-        /* 4. Tables - Light Grey Background & Black Text */
+        /* 5. Tables - Light Grey Background & Black Text */
         div[data-testid="stDataFrame"] {
             background-color: #f0f2f6 !important;
             border: 1px solid #d1d5db;
             border-radius: 5px;
             padding: 5px;
         }
-        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
-            color: #000000 !important;
-        }
 
-        /* 5. Buttons - Light Grey Background */
+        /* 6. Buttons - Light Grey Background */
         .stButton > button {
             background-color: #e5e7eb !important; /* Light Grey */
             color: #000000 !important;
             border: 1px solid #9ca3af !important;
         }
         .stButton > button:hover {
-            background-color: #d1d5db !important; /* Darker Grey on Hover */
+            background-color: #d1d5db !important;
             color: #000000 !important;
             border-color: #6b7280 !important;
         }
         
-        /* 6. Selectbox & Input Fields - Light Grey */
+        /* 7. Selectbox & Input Fields - Light Grey */
         div[data-baseweb="select"] > div {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
@@ -195,15 +202,19 @@ def show_crypto_page():
         fig = go.Figure(data=[go.Candlestick(x=data.index,
                         open=data['Open'], high=data['High'],
                         low=data['Low'], close=data['Close'])])
+        
+        # --- CHART BACKGROUND BLACK (The Fix) ---
         fig.update_layout(
             height=400, 
             margin=dict(l=0,r=0,t=0,b=0),
-            plot_bgcolor='rgba(0,0,0,0)', 
-            paper_bgcolor='rgba(0,0,0,0)', 
-            xaxis=dict(showgrid=True, gridcolor='#e5e7eb'), # Light grey grid
-            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
-            font=dict(color='black') # Chart font black
+            plot_bgcolor='black',      # Plot area background
+            paper_bgcolor='black',     # Outer chart area background
+            xaxis=dict(showgrid=True, gridcolor='#444444', color='white'), # Dark grid, white labels
+            yaxis=dict(showgrid=True, gridcolor='#444444', color='white'), # Dark grid, white labels
+            font=dict(color='white')   # General font for chart titles/legends
         )
+        # --- END CHART FIX ---
+
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("⚠️ Market data temporarily unavailable (Rate Limit). Retrying...")
