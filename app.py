@@ -202,7 +202,7 @@ def show_pnl_page():
     st.write("PNL Data will appear here once trades execute.")
 
 # ---------------------------
-# PAGE 3: CRYPTO BOT (GRID TRADING)
+# PAGE 3: CRYPTO BOT (GRID TRADING + CHART)
 # ---------------------------
 def show_crypto_bot_page():
     st.title("🤖 AI Grid Trading Bot")
@@ -236,7 +236,8 @@ def show_crypto_bot_page():
     st.subheader("⚙️ Configure Grid Bot (Manual)")
     c1, c2 = st.columns([1, 2])
     with c1:
-        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD)
+        # Save selection in state to sync with chart
+        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
         curr_price = get_current_price(selected_coin)
         st.metric("Current Price", f"${curr_price:,.2f}")
         st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
@@ -311,24 +312,55 @@ def show_crypto_bot_page():
     else:
         st.info("No active grid bots.")
 
-# ---------------------------
-# PAGE 4: CRYPTO DASHBOARD
-# ---------------------------
-def show_crypto_dashboard_page():
-    st.title("🖥️ Global Crypto Dashboard")
-    st_autorefresh(interval=300_000, key="dash_refresh")
-    dash_coin = st.sidebar.selectbox("Select Asset", CRYPTO_SYMBOLS_USD)
-    data = get_safe_crypto_data(dash_coin)
+    # Live Grid Orders
+    st.markdown("### 📋 Live Grid Orders")
+    if active_bots:
+        for b_id, data in active_bots.items():
+            with st.expander(f"Orders for {b_id}"):
+                lower = data['lower']
+                upper = data['upper']
+                grids = data.get('grids', 5)
+                levels = np.linspace(lower, upper, grids)
+                orders = []
+                for lvl in levels:
+                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.2f}", "Status": "Open"})
+                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.2f}", "Status": "Open"})
+                st.table(pd.DataFrame(orders))
+    else:
+        st.caption("Start a bot to see grid levels.")
+
+    st.markdown("---")
     
-    if data is not None:
-        curr = data['Close'].iloc[-1]
-        fig = go.Figure(data=[go.Candlestick(x=data.index,
-                        open=data['Open'], high=data['High'],
-                        low=data['Low'], close=data['Close'])])
-        fig.update_layout(height=500, plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'))
+    # --- MOVED CHART SECTION ---
+    st.subheader(f"📉 Asset Price Chart: {selected_coin}")
+    
+    # Toolbar for Timeframe
+    t_col1, t_col2 = st.columns([3, 1])
+    with t_col1:
+        time_range = st.radio("Select Timeframe", 
+                             ["1d", "5d", "1mo", "3mo", "6mo", "1y", "ytd", "max"], 
+                             index=2, 
+                             horizontal=True)
+    
+    chart_data = get_safe_crypto_data(selected_coin, period=time_range)
+    
+    if chart_data is not None:
+        fig = go.Figure(data=[go.Candlestick(x=chart_data.index,
+                        open=chart_data['Open'], high=chart_data['High'],
+                        low=chart_data['Low'], close=chart_data['Close'])])
+        
+        # Professional Black Chart Style
+        fig.update_layout(
+            height=500, margin=dict(l=0,r=0,t=0,b=0),
+            plot_bgcolor='black', paper_bgcolor='black',
+            xaxis=dict(showgrid=True, gridcolor='#333', color='white'),
+            yaxis=dict(showgrid=True, gridcolor='#333', color='white'),
+            font=dict(color='white')
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.error("Data unavailable.")
+        st.error("Chart data unavailable.")
+
 
 # ---------------------------
 # PAGE 5: AI AUTO-PILOT (LIVE ENABLED)
@@ -378,11 +410,8 @@ def show_ai_autopilot_page():
             
     else:
         # --- RUNNING DASHBOARD ---
-        
-        # 1. STATUS BANNER
         st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
         
-        # 2. HEADER METRICS
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
@@ -405,7 +434,7 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # 3. AI SCANNER LOGIC
+        # 2. AI SCANNER LOGIC
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             existing = [g for g in ap['active_grids'] if g['coin'] == scan_coin]
@@ -416,7 +445,6 @@ def show_ai_autopilot_page():
                 
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
-                    
                     if ap["mode"] == "LIVE":
                          pass
 
@@ -424,7 +452,6 @@ def show_ai_autopilot_page():
                     upper = cp * 1.05
                     qty = invest_amt / cp
                     
-                    # GENERATE GRID ORDERS FOR VISUALIZATION
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -436,7 +463,7 @@ def show_ai_autopilot_page():
                         "lower": lower, "upper": upper, "qty": qty,
                         "invest": invest_amt, "grids": 5,
                         "tp": 2.0, "sl": 3.0,
-                        "orders": grid_orders, # Store orders
+                        "orders": grid_orders,
                         "start_time": dt.datetime.now().strftime('%H:%M:%S')
                     }
                     
@@ -454,7 +481,7 @@ def show_ai_autopilot_page():
             
         st.markdown("---")
         
-        # 4. ACTIVE GRIDS TABLE
+        # 3. LIVE AUTO-PILOT GRIDS
         st.subheader(f"💼 Active {ap['mode']} Grids")
         
         if ap['active_grids']:
@@ -495,18 +522,14 @@ def show_ai_autopilot_page():
             total_pnl_color = "green" if sum_pnl >= 0 else "red"
             f4.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
             
-            # 5. NEW: GRID ORDERS TABLE
+            # LIVE ORDERS TABLE IN AUTO-PILOT
             st.markdown("### 📋 Live Grid Orders")
             for g in ap['active_grids']:
                 with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
-                    # Create a DF for orders
                     if 'orders' in g:
                         ord_df = pd.DataFrame(g['orders'])
-                        # Format Price column
                         ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
                         st.dataframe(ord_df, use_container_width=True)
-                    else:
-                        st.write("Initializing orders...")
 
         else:
             st.info("AI is scanning for volatility opportunities...")
@@ -532,15 +555,13 @@ def main():
         page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
     else: # Crypto
         st.sidebar.subheader("Crypto Menu")
-        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Dashboard"])
+        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot"])
         
         st.sidebar.markdown("---")
         with st.sidebar.expander("🔌 Binance Keys (Live Trading)"):
             st.caption("Enter credentials to enable Live Trading mode.")
             api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
-            # FIXED SYNTAX ERROR HERE
             sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
-            
             if st.button("💾 Save Keys"):
                 st.session_state["binance_api"] = api
                 st.session_state["binance_secret"] = sec
@@ -563,8 +584,6 @@ def main():
         show_crypto_bot_page()
     elif page == "AI Auto-Pilot":
         show_ai_autopilot_page()
-    elif page == "Crypto Dashboard":
-        show_crypto_dashboard_page()
 
 if __name__ == "__main__":
     main()
