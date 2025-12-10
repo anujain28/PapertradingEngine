@@ -41,12 +41,27 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        .stApp { color: #000000; }
+        /* ----- Global White Background ----- */
+        /* Forces the main app container to be pure white */
+        .stApp {
+            background-color: #ffffff !important;
+            color: #000000; /* Ensures text is black */
+        }
+        
+        /* ----- Metric Box Styling ----- */
+        /* Gives metric boxes a subtle off-white contrast so they don't disappear */
         div[data-testid="metric-container"] {
-            background-color: #f0f2f6;
-            border: 1px solid #d6d6d6;
-            padding: 10px;
-            border-radius: 10px;
+            background-color: #f9fafb; /* Very light gray for contrast */
+            border: 1px solid #e5e7eb;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        /* ----- Dataframes ----- */
+        /* Ensures dataframe backgrounds blend in */
+        div[data-testid="stDataFrame"] {
+            background-color: #ffffff;
         }
         </style>
         """, unsafe_allow_html=True)
@@ -150,7 +165,14 @@ def show_crypto_page():
         fig = go.Figure(data=[go.Candlestick(x=data.index,
                         open=data['Open'], high=data['High'],
                         low=data['Low'], close=data['Close'])])
-        fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0))
+        fig.update_layout(
+            height=400, 
+            margin=dict(l=0,r=0,t=0,b=0),
+            plot_bgcolor='rgba(0,0,0,0)', # Transparent plot background
+            paper_bgcolor='rgba(0,0,0,0)', # Transparent paper background
+            xaxis=dict(showgrid=True, gridcolor='#f0f0f0'), # Light gray grid
+            yaxis=dict(showgrid=True, gridcolor='#f0f0f0')
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("⚠️ Market data temporarily unavailable (Rate Limit). Retrying...")
