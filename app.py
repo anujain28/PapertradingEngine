@@ -68,6 +68,24 @@ AIROBOTS_URL = "https://airobots.streamlit.app/"
 DB_PATH = "paper_trades.db"
 CONFIG_PATH = "telegram_config.ini"
 
+# Binance public price endpoint for fallback (no API key needed)
+BINANCE_PUBLIC_URL = "https://api.binance.com/api/v3/ticker/price"
+CRYPTO_SYMBOLS_USDT = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
+
+
+def get_market_price(symbol: str) -> Optional[float]:
+    """
+    Fallback: fetch current market price from Binance public API
+    for symbols like 'BTCUSDT', 'ETHUSDT', etc.
+    """
+    try:
+        resp = requests.get(BINANCE_PUBLIC_URL, params={"symbol": symbol}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return float(data["price"])
+    except Exception:
+        return None
+
 
 # ---------------------------
 # TELEGRAM CONFIG (LOCAL FILE)
@@ -127,6 +145,14 @@ if "report_time" not in st.session_state:
 # store last picked top 5
 if "last_top5" not in st.session_state:
     st.session_state["last_top5"] = []
+
+# crypto flags
+if "crypto_running" not in st.session_state:
+    st.session_state["crypto_running"] = False
+if "crypto_status" not in st.session_state:
+    st.session_state["crypto_status"] = "Idle"
+if "crypto_loop_started" not in st.session_state:
+    st.session_state["crypto_loop_started"] = False
 
 # Initialize crypto state
 init_crypto_state()
@@ -236,7 +262,7 @@ def get_ltp(symbol: str) -> Optional[float]:
 
 
 # ---------------------------
-# TRADING ENGINE
+# TRADING ENGINE (STOCKS)
 # ---------------------------
 def recompute_equity():
     state = st.session_state["state"]
@@ -591,155 +617,13 @@ def show_crypto_page():
         unsafe_allow_html=True,
     )
 
+    # Auto-refresh every 60 seconds for live positions/trades
+    st_autorefresh(interval=60_000, key="crypto_auto_refresh")
+
     st.info("🟢 Binance Spot Grid Trading - ETH, BTC, SOL, ADA, XRP")
     
     # Binance API config
     with st.expander("⚙️ Binance API Configuration", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
-            api_key = st.text_input("API Key", type="password", help="Binance API Key")
-        with col2:
-            secret_key = st.text_input("Secret Key", type="password", help="Binance Secret Key")
-        
-        if st.button("Save Binance Credentials"):
-            if api_key and secret_key:
-                save_binance_config(api_key, secret_key)
-                st.success("Binance credentials saved!")
-            else:
-                st.error("Please enter both API Key and Secret Key")
-    
-    # Bot status
-    status = st.session_state.get("crypto_status", "Idle")
-    st.metric("Bot Status", status)
-    
-    # Bot control
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("▶️ Start 24/7 Trading"):
-            st.session_state["crypto_running"] = True
-            st.session_state["crypto_status"] = "Starting grid trading on 5 coins..."
-            st.success("Crypto bot started! Running 24/7...")
-    with col2:
-        if st.button("⏹ Stop Trading"):
-            st.session_state["crypto_running"] = False
-            st.session_state["crypto_status"] = "Bot stopped"
-            st.warning("Crypto bot stopped.")
-    
-    # Positions
-    st.subheader("📍 Open Grid Positions")
-    positions = get_crypto_positions()
-    if not positions.empty:
-        st.dataframe(positions, use_container_width=True)
-    else:
-        st.info("No active grid positions yet. Start the bot to begin trading.")
-    
-    # Recent trades
-    st.subheader("📊 Recent Grid Orders")
-    trades = get_crypto_trades()
-    if not trades.empty:
-        st.dataframe(trades, use_container_width=True)
-    else:
-        st.info("No trades executed yet.")
-    
-    # White-font crypto engine description with 24*7 line
-    st.markdown(
-        '<p style="color:white;">'
-        'Crypto engine will work 24*7, using Binance Spot Grid Trading on BTC, ETH, SOL, ADA and XRP '
-        'to automatically place buy/sell grid orders and capture market volatility with defined risk.'
-        '</p>',
-        unsafe_allow_html=True,
-    )
-
-
-def sidebar_config():
-    st.sidebar.header("⚙️ Configuration")
-
-    # Telegram config (local file)
-    st.sidebar.subheader("Telegram settings (local)")
-
-    token_input = st.sidebar.text_input(
-        "Bot token",
-        value=TELEGRAM_TOKEN,
-        type="password",
-        help="Saved in telegram_config.ini on this machine.",
-    )
-    chat_input = st.sidebar.text_input(
-        "Chat ID",
-        value=TELEGRAM_CHAT_ID,
-        help="Your personal / group chat id for reports.",
-    )
-
-    if st.sidebar.button("💾 Save Telegram config"):
-        save_telegram_config(token_input, chat_input)
-        st.sidebar.success("Telegram config saved locally. Restart app to reload.")
-
-    # Report time
-    report_time_str = st.sidebar.text_input(
-        "Telegram report time (HH:MM, IST)",
-        value=f"{st.session_state['report_time'].hour:02d}:{st.session_state['report_time'].minute:02d}",
-    )
-    try:
-        hh, mm = report_time_str.split(":")
-        hh, mm = int(hh), int(mm)
-        st.session_state["report_time"] = dt.time(hh, mm)
-    except Exception:
-        st.sidebar.warning("Invalid time format. Use HH:MM (e.g. 16:00).")
-
-    if token_input and chat_input:
-        st.sidebar.success("Telegram configured. Daily report will be sent on weekdays.")
-    else:
-        st.sidebar.info("Enter bot token & chat id above to enable Telegram reports.")
-
-    # Engine control
-    st.sidebar.subheader("Engine control")
-    col_a, col_b = st.sidebar.columns(2)
-    with col_a:
-        if st.sidebar.button("▶️ Start engine"):
-            st.session_state["engine_running"] = True
-            st.session_state["engine_status"] = "Engine started. Waiting for market window."
-    with col_b:
-        if st.sidebar.button("⏹ Stop engine"):
-            st.session_state["engine_running"] = False
-            st.session_state["engine_status"] = "Engine stopped by user."
-
-    # Show last picked top 5
-    st.sidebar.subheader("Last top 5 from AI Robots")
-    if st.session_state["last_top5"]:
-        top5_df = pd.DataFrame(st.session_state["last_top5"])
-        st.sidebar.dataframe(top5_df, use_container_width=True, height=220)
-    else:
-        st.sidebar.info("No scan results yet. Start engine and wait for first cycle.")
-
-
-def main():
-    apply_custom_style()
-    sidebar_config()
-
-    # Start engine loop once
-    if not st.session_state.get("loop_started", False):
-        t = threading.Thread(target=trading_loop, daemon=True)
-        t.start()
-        st.session_state["loop_started"] = True
-
-    # Start crypto trading loop once
-    if not st.session_state.get("crypto_loop_started", False):
-        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
-        t_crypto.start()
-        st.session_state["crypto_loop_started"] = True
-
-    # Start Telegram scheduler once
-    start_telegram_scheduler_if_needed()
-
-
-page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
-
-if page == "Paper Trading":
-    show_paper_trading_page()
-elif page == "PNL Log":
-    show_pnl_page()
-elif page == "Crypto Bot":
-    show_crypto_page()
-
-
-if __name__ == "__main__":
-    main()
+            api_key = st.text_input("API Key", type="password", help="Bin
