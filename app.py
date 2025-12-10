@@ -158,11 +158,15 @@ if "autopilot" not in st.session_state:
         "active_grids": [], "logs": [], "history": []
     }
 else:
-    # Fix for migration
-    if "active_grids" not in st.session_state["autopilot"]:
-        st.session_state["autopilot"]["active_grids"] = []
-    if "history" not in st.session_state["autopilot"]:
-        st.session_state["autopilot"]["history"] = []
+    # Ensure all keys exist
+    defaults = {
+        "running": False, "mode": "PAPER", "currency": "USDT",
+        "total_capital": 0.0, "cash_balance": 0.0,
+        "active_grids": [], "logs": [], "history": []
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state["autopilot"]:
+            st.session_state["autopilot"][k] = v
 
 for key in ["engine_status", "engine_running", "loop_started", 
             "crypto_running", "crypto_status", "crypto_loop_started",
@@ -403,12 +407,11 @@ def show_ai_autopilot_page():
                 ap["cash_balance"] = capital_input
             
             ap["active_grids"] = []
-            ap["history"] = [] # Reset history on start
+            # Do NOT reset history here so reports persist
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started in {ap['mode']} Mode. Capital: ${ap['total_capital']:.2f}")
             st.rerun()
             
     else:
-        # RUNNING DASHBOARD
         st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
@@ -448,7 +451,6 @@ def show_ai_autopilot_page():
                     upper = cp * 1.05
                     qty = invest_amt / cp
                     
-                    # Generate Orders for Display
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -507,11 +509,14 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
-                    # CLOSE POSITION & SAVE TO HISTORY
+                    # CLOSE POSITION & CAPTURE IST TIMESTAMP
                     ap['cash_balance'] += curr_val
                     
+                    # Capture exact close time in IST
+                    close_time_ist = dt.datetime.now(IST)
+                    
                     closed_trade = {
-                        "date": dt.datetime.now(),
+                        "date": close_time_ist, # IST datetime object
                         "coin": g['coin'],
                         "invested": g['invest'],
                         "pnl": pnl,
@@ -559,20 +564,20 @@ def show_crypto_report_page():
 
     # Convert History to DataFrame
     df = pd.DataFrame(ap["history"])
-    df['date'] = pd.to_datetime(df['date'])
+    # Date is already a datetime object (IST), perfect for pandas operations
     
     # --- METRICS ---
     total_profit = df['pnl'].sum()
-    total_invested_vol = df['invested'].sum()
     avg_roi = df['return_pct'].mean()
     win_count = len(df[df['pnl'] > 0])
     total_count = len(df)
     win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
     
-    # Projections (Simple linear extrapolation)
-    daily_avg = total_profit / max(1, df['date'].nunique())
+    # Projections
+    # Calculate days active based on unique days in history
+    unique_days = df['date'].dt.date.nunique()
+    daily_avg = total_profit / max(1, unique_days)
     proj_monthly = daily_avg * 30
-    proj_yearly = daily_avg * 365
     
     # METRIC CARDS
     m1, m2, m3, m4 = st.columns(4)
@@ -587,14 +592,14 @@ def show_crypto_report_page():
     c1, c2, c3 = st.tabs(["Daily Report", "Weekly Report", "Monthly Report"])
     
     with c1:
-        st.subheader("Daily Profit Log")
+        st.subheader("Daily Profit Log (IST)")
+        # Group by IST Date
         daily_df = df.groupby(df['date'].dt.date)[['invested', 'pnl']].sum().reset_index()
         daily_df.columns = ['Date', 'Total Invested', 'Net PnL']
         st.dataframe(daily_df, use_container_width=True)
         
     with c2:
         st.subheader("Weekly Summary")
-        # ISO Calendar week grouping
         df['Week'] = df['date'].dt.isocalendar().week
         weekly_df = df.groupby('Week')[['invested', 'pnl']].sum().reset_index()
         st.dataframe(weekly_df, use_container_width=True)
@@ -607,7 +612,10 @@ def show_crypto_report_page():
         
     st.markdown("---")
     st.subheader("📜 Complete Trade Log")
-    st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+    # Format date for display
+    display_df = df.copy()
+    display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+    st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
 
 
 # ---------------------------
