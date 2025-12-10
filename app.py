@@ -2,7 +2,7 @@ import streamlit as st
 import threading
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# Import Local Modules
+# Direct Imports (Flat Structure)
 try:
     from utils import apply_custom_style, init_db, show_sidebar_config
     import crypto
@@ -16,16 +16,14 @@ st.set_page_config(page_title="Paisa Banao Engine", layout="wide", page_icon="�
 
 def main():
     if not MODULES_LOADED:
-        st.error(f"Modules missing! Ensure 'utils.py', 'crypto.py', and 'stocks.py' are in the same folder. Error: {ERR_MSG}")
+        st.error(f"Modules missing! Ensure utils.py, crypto.py, stocks.py are in the folder. Error: {ERR_MSG}")
         return
 
-    # Init
     apply_custom_style()
     init_db()
     crypto.init_crypto_state()
     stocks.init_stock_state()
 
-    # --- SIDEBAR ---
     st.sidebar.title("💰 Paisa Banao")
     st.sidebar.title("Navigation")
     
@@ -36,10 +34,8 @@ def main():
     st.sidebar.subheader("🪙 Crypto Menu")
     page_crypto = st.sidebar.radio("Crypto Actions", ["Crypto Auto Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
-    # --- RENDER SIDEBAR CONFIGS (FROM UTILS) ---
     show_sidebar_config()
 
-    # --- NAVIGATION LOGIC ---
     if "last_stock" not in st.session_state: st.session_state["last_stock"] = page_stocks
     if "last_crypto" not in st.session_state: st.session_state["last_crypto"] = page_crypto
     if "mode" not in st.session_state: st.session_state["mode"] = "crypto"
@@ -51,14 +47,12 @@ def main():
         st.session_state["mode"] = "crypto"
         st.session_state["last_crypto"] = page_crypto
 
-    # --- BACKGROUND THREADS ---
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
         t = threading.Thread(target=crypto.crypto_trading_loop, daemon=True)
         add_script_run_ctx(t)
         t.start()
 
-    # --- ROUTING ---
     if st.session_state["mode"] == "stocks":
         if page_stocks == "Bomb Stocks": stocks.run_stocks_app()
         else: st.info("Stocks PNL Log Coming Soon")
