@@ -327,7 +327,7 @@ def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
         trail_stop = pos["max_price"] * (1 - trail_pct)
         # No loss rule: only exit if ltp >= entry_price
         min_exit_price = max(trail_stop, pos["entry_price"])
-            if ltp <= trail_stop and ltp >= pos["entry_price"]:
+        if ltp <= trail_stop and ltp >= pos["entry_price"]:
                 to_exit.append((sym, ltp))
                 for sym, exit_price in to_exit:
                         realize_profit(sym, exit_price, now, batch_trades)
