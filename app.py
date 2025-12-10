@@ -41,27 +41,58 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* ----- Global White Background ----- */
-        /* Forces the main app container to be pure white */
+        /* 1. Global Font Black & Background White */
         .stApp {
             background-color: #ffffff !important;
-            color: #000000; /* Ensures text is black */
+            color: #000000 !important;
         }
         
-        /* ----- Metric Box Styling ----- */
-        /* Gives metric boxes a subtle off-white contrast so they don't disappear */
-        div[data-testid="metric-container"] {
-            background-color: #f9fafb; /* Very light gray for contrast */
-            border: 1px solid #e5e7eb;
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        /* 2. Force all text elements to be black */
+        p, h1, h2, h3, h4, h5, h6, span, div, label {
+            color: #000000 !important;
         }
 
-        /* ----- Dataframes ----- */
-        /* Ensures dataframe backgrounds blend in */
+        /* 3. Metric Boxes - Light Grey Background */
+        div[data-testid="metric-container"] {
+            background-color: #f0f2f6 !important; /* Light Grey */
+            border: 1px solid #d1d5db;
+            color: #000000 !important;
+            border-radius: 8px;
+        }
+        /* Metric Labels & Values Black */
+        div[data-testid="metric-container"] label, 
+        div[data-testid="metric-container"] div {
+            color: #000000 !important;
+        }
+
+        /* 4. Tables - Light Grey Background & Black Text */
         div[data-testid="stDataFrame"] {
-            background-color: #ffffff;
+            background-color: #f0f2f6 !important;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            padding: 5px;
+        }
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+            color: #000000 !important;
+        }
+
+        /* 5. Buttons - Light Grey Background */
+        .stButton > button {
+            background-color: #e5e7eb !important; /* Light Grey */
+            color: #000000 !important;
+            border: 1px solid #9ca3af !important;
+        }
+        .stButton > button:hover {
+            background-color: #d1d5db !important; /* Darker Grey on Hover */
+            color: #000000 !important;
+            border-color: #6b7280 !important;
+        }
+        
+        /* 6. Selectbox & Input Fields - Light Grey */
+        div[data-baseweb="select"] > div {
+            background-color: #f0f2f6 !important;
+            color: #000000 !important;
+            border: 1px solid #d1d5db;
         }
         </style>
         """, unsafe_allow_html=True)
@@ -140,7 +171,6 @@ def show_pnl_page():
 
 def show_crypto_page():
     st.title("🤖 Live Crypto Paper Trading Bot")
-    # Refresh every 2 minutes to see live position updates
     st_autorefresh(interval=120_000, key="crypto_auto_refresh") 
 
     # 1. LIVE MARKET DATA
@@ -168,10 +198,11 @@ def show_crypto_page():
         fig.update_layout(
             height=400, 
             margin=dict(l=0,r=0,t=0,b=0),
-            plot_bgcolor='rgba(0,0,0,0)', # Transparent plot background
-            paper_bgcolor='rgba(0,0,0,0)', # Transparent paper background
-            xaxis=dict(showgrid=True, gridcolor='#f0f0f0'), # Light gray grid
-            yaxis=dict(showgrid=True, gridcolor='#f0f0f0')
+            plot_bgcolor='rgba(0,0,0,0)', 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            xaxis=dict(showgrid=True, gridcolor='#e5e7eb'), # Light grey grid
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
+            font=dict(color='black') # Chart font black
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -179,7 +210,7 @@ def show_crypto_page():
 
     st.markdown("---")
 
-    # 2. BOT CONTROLS (Simulated / Paper Trading)
+    # 2. BOT CONTROLS
     st.subheader("⚙️ Bot Controls")
     
     if not CRYPTO_BOT_AVAILABLE:
