@@ -96,34 +96,25 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* --- EXPANDER & TABLE FIX (The Request) --- */
-        /* Force Expander Header to be Light Grey with Black Text */
+        /* Table / Dataframe Styling Override for Visibility */
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+            color: #000000 !important;
+            background-color: #ffffff !important;
+        }
+        div[data-testid="stTable"] {
+            color: #000000 !important;
+        }
+        
+        /* Expander styling */
         div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
             border: 1px solid #dee2e6;
-            border-radius: 5px;
         }
-        div[data-testid="stExpander"] details summary:hover {
-            color: #000000 !important;
-        }
-        /* Force Expander Content (The Table Area) to be White */
         div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
             background-color: #ffffff !important;
         }
-        /* Force Table Text to be Black */
-        div[data-testid="stExpander"] table, 
-        div[data-testid="stExpander"] td, 
-        div[data-testid="stExpander"] th {
-            color: #000000 !important;
-            background-color: #ffffff !important;
-            border-bottom: 1px solid #eee !important;
-        }
-        /* Fix for DataFrame Container */
-        div[data-testid="stDataFrame"] {
-            background-color: #ffffff !important;
-        }
-
+        
         /* Chart Override */
         .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
@@ -170,6 +161,19 @@ def get_usd_inr_rate():
     return 84.0 
 
 # ---------------------------
+# TELEGRAM HELPER
+# ---------------------------
+def send_telegram_alert(message):
+    token = st.session_state.get("tg_token")
+    chat_id = st.session_state.get("tg_chat_id")
+    if token and chat_id:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"})
+        except Exception as e:
+            print(f"Telegram Error: {e}")
+
+# ---------------------------
 # STATE MANAGEMENT
 # ---------------------------
 if "state" not in st.session_state:
@@ -203,9 +207,9 @@ else:
 
 for key in ["engine_status", "engine_running", "loop_started", 
             "crypto_running", "crypto_status", "crypto_loop_started",
-            "binance_api", "binance_secret"]:
+            "binance_api", "binance_secret", "tg_token", "tg_chat_id"]:
     if key not in st.session_state:
-        st.session_state[key] = None if "binance" in key else False
+        st.session_state[key] = "" if "tg" in key else (None if "binance" in key else False)
 
 if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
@@ -298,6 +302,7 @@ def show_crypto_manual_bot_page():
             pnl_inr = pnl_usd * usd_inr
             inv_inr = data['invest'] * usd_inr
             pnl_pct = (pnl_usd / data['invest']) * 100
+            
             status_text = "🟢 Running"
             if pnl_pct >= data['tp']: status_text = "✅ TP HIT"
             elif pnl_pct <= -data['sl']: status_text = "❌ SL HIT"
@@ -310,7 +315,16 @@ def show_crypto_manual_bot_page():
             pnl_color = "green" if pnl_usd >= 0 else "red"
             c5.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
             c6.write(status_text)
+            
             if c7.button("Stop", key=f"stop_{b_id}"):
+                final_val_inr = inv_inr + pnl_inr
+                msg = (f"🚨 *Manual Crypto Trade Closed*\n"
+                       f"Asset: {data['coin']}\n"
+                       f"💰 Invested: ₹{inv_inr:,.2f}\n"
+                       f"💵 Final Value: ₹{final_val_inr:,.2f}\n"
+                       f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                send_telegram_alert(msg)
+                
                 del st.session_state["grid_bot_active"][b_id]
                 st.rerun()
     else:
@@ -371,7 +385,6 @@ def show_ai_autopilot_page():
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
-        
         grid_current_val = 0.0
         for g in ap['active_grids']:
              cp = get_current_price(g['coin'])
@@ -396,6 +409,7 @@ def show_ai_autopilot_page():
                 chance = random.randint(1, 10)
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
+                    # Grid Params
                     lower = cp * 0.95
                     upper = cp * 1.05
                     grid_levels = np.linspace(lower, upper, 5)
@@ -413,9 +427,9 @@ def show_ai_autopilot_page():
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Deployed Grid: {scan_coin}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
                 elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral.")
 
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]:
@@ -429,20 +443,15 @@ def show_ai_autopilot_page():
             c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
             c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
             
-            sum_inv = 0.0
-            sum_val = 0.0
-            sum_pnl = 0.0
+            sum_inv = 0.0; sum_val = 0.0; sum_pnl = 0.0
 
             for i, g in enumerate(ap['active_grids']):
                 cp = get_current_price(g['coin'])
                 curr_val = g['qty'] * cp
                 pnl = curr_val - g['invest']
+                sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
                 
-                sum_inv += g['invest']
-                sum_val += curr_val
-                sum_pnl += pnl
-                
-                # SAFETY CHECK FOR MISSING ORDERS
+                # Check for regenerated orders
                 if 'orders' not in g or not g['orders']:
                     g_levels = np.linspace(g['lower'], g['upper'], 5)
                     new_orders = []
@@ -460,9 +469,23 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
+                    # CLOSE
                     ap['cash_balance'] += curr_val
-                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": (pnl/g['invest'])*100})
+                    pnl_pct = (pnl/g['invest'])*100
+                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
                     ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
+                    
+                    # TELEGRAM ALERT
+                    inv_inr = g['invest'] * usd_inr
+                    val_inr = curr_val * usd_inr
+                    pnl_inr = pnl * usd_inr
+                    msg = (f"🚨 *AI Auto-Pilot Trade Closed*\n"
+                           f"Asset: {g['coin']}\n"
+                           f"💰 Invested: ₹{inv_inr:,.2f}\n"
+                           f"💵 Final Value: ₹{val_inr:,.2f}\n"
+                           f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                    send_telegram_alert(msg)
+                    
                     ap['active_grids'].pop(i)
                     st.rerun()
             
@@ -499,6 +522,8 @@ def show_crypto_report_page():
     ap = st.session_state["autopilot"]
     usd_inr = st.session_state["usd_inr"]
     
+    st_autorefresh(interval=30_000, key="report_refresh")
+
     st.subheader("🔴 Live Portfolio")
     running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
     running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
@@ -517,7 +542,10 @@ def show_crypto_report_page():
         m1, m2 = st.columns(2)
         m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
         m2.metric("Trades", len(df))
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
     else:
         st.info("No closed trades.")
 
@@ -526,8 +554,8 @@ def show_crypto_report_page():
 # ---------------------------
 def main():
     apply_custom_style()
-    st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
     
+    st.sidebar.title("💰 Paisa Banao")
     st.sidebar.title("Navigation")
     
     st.sidebar.subheader("📈 Stocks Menu")
@@ -538,10 +566,19 @@ def main():
     page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
+    
+    with st.sidebar.expander("📢 Telegram Alerts"):
+        tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+        tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
+        if st.button("💾 Save Telegram Config"):
+            st.session_state["tg_token"] = tg_token
+            st.session_state["tg_chat_id"] = tg_chat
+            st.success("Saved!")
+
     with st.sidebar.expander("🔌 Binance Keys"):
         api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
         sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
-        if st.button("💾 Save Keys"):
+        if st.button("💾 Save Binance Keys"):
             st.session_state["binance_api"] = api
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
