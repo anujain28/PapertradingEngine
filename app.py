@@ -1,4 +1,4 @@
-# app.py
+            # app.py
 import os
 import time
 import threading
@@ -753,7 +753,6 @@ def main():
         show_paper_trading_page()
     elif page == "PNL Log":
     show_pnl_page()
-        show_crypto_page()
     elif page == "Crypto Bot":
         show_crypto_page()
 
