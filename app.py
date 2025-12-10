@@ -1,13 +1,14 @@
 # app.py
-# Full AI Stock Analysis Bot + Paper Trading (updated)
-# - Auto-start paper trading by default
-# - "Stop trading for today" persisted control
-# - Improved font visibility for laptop
-# - Universe scan every scan_interval_min, exclude Dhan/Shoonya, re-check charts before buy
-# - Booked trades & PnL logs persisted in data/
+# AI Stock Analysis Bot + Paper Trading
+# - Multi-URL keep-alive pinger (airobots, airobotsmf, paisado)
+# - Paper trading scans NIFTY200 CSV for picks (excludes Dhan/Shoonya/open positions)
+# - Run Full Scan button visible across the app (populates BTST/Intraday/Weekly/Monthly recommendations)
+# - BTST/Intraday/Weekly/Monthly pages show scan results
+# - Auto-start paper trading (unless stopped for today) and Stop-for-today control
+# - Improved fonts and light grey background for laptop readability
+# Note: paper trading is simulated only.
 
 import os
-import sys
 import json
 import time
 import math
@@ -67,10 +68,13 @@ DEFAULT_BUY_SCORE_THRESHOLD = 65.0
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Keep-alive / self ping
-KEEP_ALIVE = True
-SELF_URL = "https://paisado.streamlit.app/"   # user provided app URL
-SELF_PING_INTERVAL_SEC = 4 * 60  # 4 minutes
+# Keep-alive / default ping URLs & interval (5-10 minutes)
+DEFAULT_PING_URLS = [
+    "https://airobots.streamlit.app/",
+    "https://airobotsmf.streamlit.app/",
+    "https://paisado.streamlit.app/",
+]
+DEFAULT_PING_INTERVAL_SEC = 5 * 60  # default 5 minutes
 
 # -------------------------
 # Helpers
@@ -132,7 +136,7 @@ def is_stopped_today() -> bool:
     return bool(read_stop_for_today().get("stopped", False))
 
 # -------------------------
-# Universe loader
+# Universe loader (CSV)
 # -------------------------
 def load_nifty200_universe():
     symbols = []
@@ -140,16 +144,24 @@ def load_nifty200_universe():
     if NIFTY200_CSV.exists():
         try:
             df = pd.read_csv(NIFTY200_CSV)
-            if "SYMBOL" in df.columns:
-                df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip().str.upper()
-                symbols = df["SYMBOL"].dropna().unique().tolist()
-            if "YF_TICKER" in df.columns and "SYMBOL" in df.columns:
-                mapping = dict(zip(df["SYMBOL"].astype(str).str.strip().str.upper(), df["YF_TICKER"].astype(str).str.strip()))
+            # detect common column names
+            sym_col = None
+            yf_col = None
+            for c in df.columns:
+                if c.strip().upper() in ["SYMBOL", "TICKER", "SYMBOLS", "SECURITY"]:
+                    sym_col = c
+                if c.strip().upper() in ["YF_TICKER", "YF", "YAHOO", "YF_TICKER"]:
+                    yf_col = c
+            if sym_col:
+                df[sym_col] = df[sym_col].astype(str).str.strip().str.upper()
+                symbols = df[sym_col].dropna().unique().tolist()
+            if sym_col and yf_col:
+                mapping = dict(zip(df[sym_col].astype(str).str.strip().str.upper(), df[yf_col].astype(str).str.strip()))
         except Exception:
             symbols = []
             mapping = {}
     if not symbols:
-        # fallback sample list
+        # fallback sample list if CSV missing
         symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "LT"]
     return symbols, mapping
 
@@ -223,7 +235,7 @@ def compute_indicators(df: pd.DataFrame):
     return out
 
 # -------------------------
-# Signal scoring
+# Scoring function (used for buy decision & recommendations)
 # -------------------------
 def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_price: Optional[float]=None):
     score = 0.0
@@ -278,7 +290,7 @@ def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_pric
     return min(100.0, score)
 
 # -------------------------
-# Paper Trader
+# Paper Trader (persisted positions & sell/buy logic)
 # -------------------------
 class PaperTrader:
     def __init__(self):
@@ -354,15 +366,15 @@ class PaperTrader:
             sell_turnover = price * qty
             gross_profit = sell_turnover - invested
 
-            brokerage = sell_turnover * fees_cfg.get("brokerage_pct", DEFAULT_BROKERAGE_PCT)
-            gst = brokerage * fees_cfg.get("gst_pct", DEFAULT_GST_PCT)
-            stt = sell_turnover * fees_cfg.get("stt_pct", DEFAULT_STT_PCT)
-            exchange = sell_turnover * fees_cfg.get("exchange_pct", DEFAULT_EXCHANGE_PCT)
-            stamp = sell_turnover * fees_cfg.get("stamp_pct", DEFAULT_STAMP_PCT)
-            platform_fee = fees_cfg.get("platform_fee", DEFAULT_PLATFORM_FEE)
+            brokerage = sell_turnover * fees_cfg.get("brokerage_pct", 0.0003)
+            gst = brokerage * fees_cfg.get("gst_pct", 0.18)
+            stt = sell_turnover * fees_cfg.get("stt_pct", 0.001)
+            exchange = sell_turnover * fees_cfg.get("exchange_pct", 0.00003)
+            stamp = sell_turnover * fees_cfg.get("stamp_pct", 0.00015)
+            platform_fee = fees_cfg.get("platform_fee", 10.0)
             fees_sum = brokerage + gst + stt + exchange + stamp + platform_fee
 
-            tax = max(0.0, gross_profit) * fees_cfg.get("tax_pct", DEFAULT_TAX_PCT)
+            tax = max(0.0, gross_profit) * fees_cfg.get("tax_pct", 0.15)
 
             net_realized = gross_profit - fees_sum - tax
 
@@ -435,10 +447,12 @@ class PaperTradingScheduler:
             "auto_start_time": DEFAULT_AUTO_START_TIME,
             "eod_capture_time": DEFAULT_EOD_CAPTURE_TIME,
             "max_positions": DEFAULT_MAX_POSITIONS,
-            "self_url": SELF_URL,
-            "keep_alive": KEEP_ALIVE,
+            "self_url": DEFAULT_PING_URLS[0],
+            "keep_alive": True,
             "scan_interval_min": DEFAULT_SCAN_INTERVAL_MIN,
-            "buy_score_threshold": DEFAULT_BUY_SCORE_THRESHOLD
+            "buy_score_threshold": DEFAULT_BUY_SCORE_THRESHOLD,
+            "ping_urls": DEFAULT_PING_URLS,
+            "ping_interval_sec": DEFAULT_PING_INTERVAL_SEC
         }
         self.load_config()
 
@@ -477,7 +491,6 @@ class PaperTradingScheduler:
         with self.lock:
             if self.running:
                 return
-            # Respect stop-for-today flag
             if is_stopped_today():
                 return
             self.running = True
@@ -516,7 +529,6 @@ class PaperTradingScheduler:
 
             scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
             picks = []
-            # pick extra candidates to revalidate with live intraday
             pool_count = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS) * 3)
             for sym, score, ind, df in scored_sorted[:pool_count]:
                 picks.append({"ticker": sym, "score": score, "ind": ind, "df": df})
@@ -538,7 +550,6 @@ class PaperTradingScheduler:
                 return
 
             max_positions = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS))
-            # limit to remaining slots
             open_count = len(paper.load_open_positions() or {})
             slots = max_positions - open_count
             if slots <= 0:
@@ -694,23 +705,26 @@ class PaperTradingScheduler:
 paper_scheduler = PaperTradingScheduler()
 
 # -------------------------
-# Self-pinger (keep alive) thread
+# Multi-URL pinger thread (pings configured URLs at interval)
 # -------------------------
-def self_ping_loop(url: str, interval: int, enabled: bool):
-    if not enabled or not url:
+def multi_ping_loop(urls: List[str], interval_sec: int, enabled: bool):
+    if not enabled or not urls:
         return
     while True:
-        try:
-            requests.get(url, timeout=10)
-        except Exception:
-            pass
-        time.sleep(interval)
+        for u in urls:
+            try:
+                requests.get(u, timeout=10)
+            except Exception:
+                pass
+            time.sleep(1)  # small gap between pings
+        time.sleep(max(60, interval_sec))
 
-# start internal pinger if enabled and configured URL present
+# start pinger with configured list (can be updated in UI)
 try:
-    pinger_url = paper_scheduler.config.get("self_url", SELF_URL) or SELF_URL
-    if paper_scheduler.config.get("keep_alive", KEEP_ALIVE) and pinger_url:
-        tping = threading.Thread(target=self_ping_loop, args=(pinger_url, SELF_PING_INTERVAL_SEC, True), daemon=True)
+    cfg_urls = paper_scheduler.config.get("ping_urls", DEFAULT_PING_URLS)
+    cfg_interval = int(paper_scheduler.config.get("ping_interval_sec", DEFAULT_PING_INTERVAL_SEC))
+    if paper_scheduler.config.get("keep_alive", True) and cfg_urls:
+        tping = threading.Thread(target=multi_ping_loop, args=(cfg_urls, cfg_interval, True), daemon=True)
         tping.start()
 except Exception:
     pass
@@ -727,10 +741,73 @@ except Exception:
     pass
 
 # -------------------------
-# Streamlit UI & CSS (fonts)
+# Full-scan analyzer (populates recommendations used by BTST/Intraday/Weekly/Monthly pages)
+# -------------------------
+def analyze_ticker_for_period(ticker: str, period_type: str) -> Optional[Dict]:
+    cfgs = {
+        'BTST': {'period': '10d', 'interval': '15m'},
+        'Intraday': {'period': '5d', 'interval': '15m'},
+        'Weekly': {'period': '90d', 'interval': '1d'},
+        'Monthly': {'period': '1y', 'interval': '1d'}
+    }
+    if period_type not in cfgs:
+        return None
+    cfg = cfgs[period_type]
+    try:
+        df = fetch_yf_df(ticker, period=cfg['period'], interval=cfg['interval'])
+        if df is None or df.empty or len(df) < 10:
+            return None
+        ind = compute_indicators(df)
+        score = compute_signal_score_from_indicators(ind, df)
+        price = float(df["Close"].iloc[-1])
+        target = round(price * (1 + paper_scheduler.config.get("target_pct", DEFAULT_TARGET_PCT)), 2)
+        if score >= 75:
+            rec = "BUY"
+        elif score >= 50:
+            rec = "HOLD"
+        else:
+            rec = "SELL"
+        return {
+            "ticker": ticker,
+            "price": round(price, 2),
+            "score": round(score, 1),
+            "target": target,
+            "recommendation": rec,
+            "period": period_type,
+            "indicators": ind
+        }
+    except Exception:
+        return None
+
+def run_full_scan(max_per_period: int = 20):
+    periods = ['BTST', 'Intraday', 'Weekly', 'Monthly']
+    recs_map = {p: [] for p in periods}
+    universe = STOCK_UNIVERSE.copy()
+    universe = [u.upper() for u in universe]
+    total = len(universe)
+    bar = st.progress(0)
+    txt = st.empty()
+    for i, tck in enumerate(universe):
+        txt.text(f"Scanning {i+1}/{total}: {tck}")
+        for p in periods:
+            res = analyze_ticker_for_period(tck, p)
+            if res:
+                recs_map[p].append(res)
+        bar.progress((i + 1) / total)
+    for p in periods:
+        recs_map[p] = sorted(recs_map[p], key=lambda x: x.get("score", 0), reverse=True)[:max_per_period]
+    st.session_state['recommendations'] = recs_map
+    bar.empty()
+    txt.empty()
+    return recs_map
+
+if 'recommendations' not in st.session_state:
+    st.session_state['recommendations'] = {'BTST': [], 'Intraday': [], 'Weekly': [], 'Monthly': []}
+
+# -------------------------
+# Streamlit UI & CSS (fonts & grey background)
 # -------------------------
 st.set_page_config(page_title="🤖 AI Stock Analysis Bot + Paper Trading", page_icon="📈", layout="wide")
-# Use system font stack and increase sizes slightly for laptop readability
 st.markdown(
     """
     <style>
@@ -738,9 +815,8 @@ st.markdown(
         font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial !important;
     }
     .stApp {
-        background-color: #fbfbf9;
+        background-color: #f3f4f6 !important;  /* subtle grey background */
     }
-    /* generic increased font sizes - conservative */
     .stButton>button { font-size:13px; font-weight:600; }
     .stTextInput>div>label, .stNumberInput>div>label { font-size:13px; }
     .stMarkdown p, .stMarkdown div { font-size:14px; line-height:1.35; }
@@ -765,20 +841,79 @@ NAV_PAGES = [
     "⚙️ Configuration",
 ]
 with st.sidebar:
-    page = st.radio("Navigation", NAV_PAGES, index=NAV_PAGES.index("🔥 Top Stocks"))
+    page = st.radio("Navigation", NAV_PAGES, index=0)
 
-# Header
-st.markdown('<div style="padding:12px;border-radius:12px;background:linear-gradient(90deg,#4f46e5,#0ea5e9);color:white"><h2>AI Stock Analysis Bot + Paper Trading</h2></div>', unsafe_allow_html=True)
+# Header: Run Full Scan button visible at top of every view
+st.markdown(
+    '<div style="padding:12px;border-radius:12px;background:linear-gradient(90deg,#4f46e5,#0ea5e9);color:white;display:flex;justify-content:space-between;align-items:center">'
+    '<div><h2 style="margin:0">AI Stock Analysis Bot + Paper Trading</h2>'
+    '<div style="opacity:0.95">NIFTY200 CSV • Multi-timeframe scanner • Paper Trading</div></div>'
+    '<div style="display:flex;gap:8px;align-items:center">'
+    '<form></form>'
+    '</div></div>',
+    unsafe_allow_html=True
+)
+
+col_scan, _ = st.columns([1, 9])
+with col_scan:
+    if st.button("🚀 Run Full Scan (manual)", type="primary"):
+        st.info("Running full scan across NIFTY200. This can take a few minutes.")
+        _ = run_full_scan(max_per_period=20)
+        st.success("Scan complete — recommendations updated for BTST/Intraday/Weekly/Monthly.")
+
 st.caption(f"Local time: {now_ist().strftime('%d-%m-%Y %I:%M %p')} IST")
 
-# --- Pages ---
+# helper to render recs
+def render_reco_table(recs: List[Dict], label: str):
+    if not recs:
+        st.info(f"No recommendations for {label} yet. Run Full Scan.")
+        return
+    df = pd.DataFrame(recs)
+    df['diff_to_target_pct'] = ((df['target'] - df['price']) / df['target']) * 100.0
+    df = df[['ticker', 'price', 'target', 'diff_to_target_pct', 'score', 'recommendation']]
+    df = df.rename(columns={
+        'ticker': 'Ticker',
+        'price': 'CMP (₹)',
+        'target': 'Recommended Target (₹)',
+        'diff_to_target_pct': 'Diff to Target (%)',
+        'score': 'Score',
+        'recommendation': 'Reco'
+    })
+    st.dataframe(df, use_container_width=True)
+
+# Pages
 if page == "🔥 Top Stocks":
-    st.subheader("🔥 Top Stocks (preview)")
-    st.write("Run scans from Paper Trading or use the analyzer to populate recommendations.")
+    st.subheader("🔥 Top Stocks (combined top from all periods)")
+    combined = []
+    for p in ['BTST', 'Intraday', 'Weekly', 'Monthly']:
+        for r in st.session_state['recommendations'].get(p, [])[:5]:
+            rr = dict(r); rr['period'] = p
+            combined.append(rr)
+    if not combined:
+        st.info("No top stocks yet. Run Full Scan.")
+    else:
+        df_comb = pd.DataFrame(combined).sort_values("score", ascending=False)
+        st.dataframe(df_comb[['ticker','price','score','period','recommendation']].rename(columns={'ticker':'Ticker','price':'CMP','score':'Score','period':'Period','recommendation':'Reco'}), use_container_width=True)
+
+elif page == "🌙 BTST":
+    st.subheader("🌙 BTST Opportunities")
+    render_reco_table(st.session_state['recommendations'].get('BTST', []), "BTST")
+
+elif page == "⚡ Intraday":
+    st.subheader("⚡ Intraday Signals")
+    render_reco_table(st.session_state['recommendations'].get('Intraday', []), "Intraday")
+
+elif page == "📆 Weekly":
+    st.subheader("📆 Weekly Swing Ideas")
+    render_reco_table(st.session_state['recommendations'].get('Weekly', []), "Weekly")
+
+elif page == "📅 Monthly":
+    st.subheader("📅 Monthly Position Trades")
+    render_reco_table(st.session_state['recommendations'].get('Monthly', []), "Monthly")
 
 elif page == "📣 Dividends":
-    st.subheader("📣 Upcoming Dividends demo")
-    st.info("Dividends scanning available in full app; simplified here.")
+    st.subheader("📣 Upcoming Dividends (future only)")
+    st.info("If your NIFTY200 CSV contains upcoming dividend/ex-date columns we will show future dividends here. Otherwise this is a placeholder.")
 
 elif page == "📊 Groww":
     st.subheader("📊 Groww Upload (demo)")
@@ -811,7 +946,6 @@ elif page == "🧾 PNL Log":
         st.download_button("Download Booked Trades CSV", data=df_booked.to_csv(index=False), file_name="booked_trades.csv")
     else:
         st.info("No booked trades yet.")
-
     if Path(PAPER_PNL_FILE).exists():
         df_pnl = pd.read_csv(PAPER_PNL_FILE)
         st.markdown("### PnL Log")
@@ -822,7 +956,7 @@ elif page == "🧾 PNL Log":
 
 elif page == "🪙 Paper Trading":
     st.subheader("🪙 Paper Trading Engine")
-    st.markdown("Auto-start enabled by default. You can stop trading for today (persisted) or stop/restart the background scheduler manually.")
+    st.markdown("Auto-start enabled by default. You can stop trading for today (persisted) or stop/restart the background scheduler manually. The engine scans the CSV universe for picks.")
 
     # Controls
     c1, c2 = st.columns([2, 3])
@@ -931,14 +1065,20 @@ elif page == "🪙 Paper Trading":
 
 elif page == "⚙️ Configuration":
     st.subheader("⚙️ Configuration & Keep-Alive")
-    st.markdown("Configure app behavior. Set Self URL to your deployed app if you want the internal pinger to use it.")
-    self_url = st.text_input("Self URL (for keep-alive pinger)", value=paper_scheduler.config.get("self_url", SELF_URL))
-    keep_alive = st.checkbox("Enable internal self-ping keep-alive (may not prevent host sleep on free tiers)", value=paper_scheduler.config.get("keep_alive", KEEP_ALIVE))
-    if st.button("Save Keep-Alive"):
-        paper_scheduler.config["self_url"] = self_url
-        paper_scheduler.config["keep_alive"] = bool(keep_alive)
-        paper_scheduler.save_config()
-        st.success("Saved keep-alive config. External pings (UptimeRobot) are more reliable on Streamlit Community Cloud.")
+    st.markdown("Configure app behavior. Set ping URLs and ping interval to keep apps alive (5–10 minutes recommended).")
+    urls_text = st.text_area("Ping URLs (comma separated)", value=",".join(paper_scheduler.config.get("ping_urls", DEFAULT_PING_URLS)))
+    ping_interval_min = st.number_input("Ping interval (minutes, 5-10)", min_value=5, max_value=10, value=int(paper_scheduler.config.get("ping_interval_sec", DEFAULT_PING_INTERVAL_SEC)//60))
+    keep_alive = st.checkbox("Enable internal multi-URL ping keep-alive", value=paper_scheduler.config.get("keep_alive", True))
+    if st.button("Save Keep-Alive & Ping settings"):
+        try:
+            urls = [u.strip() for u in urls_text.split(",") if u.strip()]
+            paper_scheduler.config["ping_urls"] = urls
+            paper_scheduler.config["ping_interval_sec"] = int(ping_interval_min * 60)
+            paper_scheduler.config["keep_alive"] = bool(keep_alive)
+            paper_scheduler.save_config()
+            st.success("Saved ping configuration. New pinger will use these URLs on next reload.")
+        except Exception as e:
+            st.error(f"Could not save ping config: {e}")
 
 st.markdown("---")
-st.caption("Paper Trading is simulation-only. This app will attempt to auto-start paper trading on load. Use 'Stop trading for today' to pause autoschedules for the rest of the day.")
+st.caption("Paper Trading is simulation-only. The engine will attempt to auto-start paper trading on load unless 'Stop trading for today' is active. Use Run Full Scan to refresh recommendations used by BTST/Intraday/Weekly/Monthly pages.")
