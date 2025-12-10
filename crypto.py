@@ -7,6 +7,7 @@ import random
 import yfinance as yf
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+# Direct import since files are in same folder
 from utils import IST, send_telegram_alert, get_usd_inr_rate
 
 CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD"]
@@ -62,7 +63,7 @@ def crypto_trading_loop():
                             "grids": 5, "tp": 2.0, "sl": 3.0, "orders": grid_orders
                         })
                         ap['cash_balance'] -= invest_amt
-                        ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed: {scan_coin}")
+                        ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
 
             # 2. MONITOR
             for i in range(len(ap['active_grids']) - 1, -1, -1):
@@ -74,11 +75,13 @@ def crypto_trading_loop():
                 
                 if pnl_pct >= g['tp'] or pnl_pct <= -g['sl']:
                     ap['cash_balance'] += curr_val
-                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
+                    ap['history'].append({
+                        "date": dt.datetime.now(IST), "pnl": pnl, 
+                        "invested": g['invest'], "return_pct": pnl_pct
+                    })
                     
-                    usd_inr = get_usd_inr_rate()
                     reason = "TP Hit ✅" if pnl_pct > 0 else "SL Hit ❌"
-                    msg = f"🚨 *Auto-Pilot Closed*\nAsset: {g['coin']}\n{reason}\nPnL: ${pnl:.2f} (₹{pnl*usd_inr:.0f})"
+                    msg = f"🚨 *Auto-Pilot Closed*\nAsset: {g['coin']}\n{reason}\nPnL: ${pnl:.2f}"
                     send_telegram_alert(msg)
                     ap['logs'].insert(0, f"{reason}: {g['coin']}")
                     
@@ -95,10 +98,9 @@ def show_crypto_manual_bot_page():
     st.subheader("⚙️ Configure Bot")
     c1, c2 = st.columns([1, 2])
     with c1:
-        # The CSS in utils.py forces this to be white/black
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD)
         curr_price = get_current_price(selected_coin)
-        st.metric("Current Price", f"${curr_price:,.4f}")
+        st.metric("Price", f"${curr_price:,.4f}")
         st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
     
     with c2:
@@ -110,10 +112,10 @@ def show_crypto_manual_bot_page():
         lower_p = col_c.number_input("Lower Price", value=curr_price*0.95, format="%.4f")
         upper_p = col_d.number_input("Upper Price", value=curr_price*1.05, format="%.4f")
         
-        # ADDED: TP/SL INPUTS
+        # TP/SL Added
         col_e, col_f = st.columns(2)
-        tp_pct = col_e.number_input("Take Profit (%)", value=2.0, step=0.1)
-        sl_pct = col_f.number_input("Stop Loss (%)", value=3.0, step=0.1)
+        tp_pct = col_e.number_input("TP (%)", value=2.0, step=0.1)
+        sl_pct = col_f.number_input("SL (%)", value=3.0, step=0.1)
         
         if st.button("▶️ Start Manual Bot", type="primary"):
             st.session_state["grid_bot_active"][selected_coin] = {
@@ -137,7 +139,6 @@ def show_crypto_manual_bot_page():
     st.subheader("📍 Active Manual Bots")
     active = st.session_state["grid_bot_active"]
     if active:
-        # Header
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.write("**Coin**"); c2.write("**Entry**"); c3.write("**Inv**")
         c4.write("**Value**"); c5.write("**PnL**"); c6.write("**Action**")
@@ -156,7 +157,7 @@ def show_crypto_manual_bot_page():
             
             if c6.button("Stop", key=f"stop_{bid}"):
                 pnl_inr = pnl * usd_inr
-                send_telegram_alert(f"🚨 Manual Bot Stopped: {d['coin']} PnL: ${pnl:.2f} (₹{pnl_inr:.0f})")
+                send_telegram_alert(f"🚨 Manual Bot Stopped: {d['coin']} PnL: ${pnl:.2f}")
                 del st.session_state["grid_bot_active"][bid]
                 st.rerun()
     else:
@@ -173,9 +174,11 @@ def show_ai_autopilot_page():
         c1, c2, c3 = st.columns(3)
         curr_mode = c1.radio("Currency", ["USDT", "INR"])
         cap_input = c2.number_input("Capital", value=1000.0)
+        
         if c3.button("🚀 Launch Engine", type="primary"):
             ap["running"] = True
             ap["currency"] = "USDT" if curr_mode == "USDT" else "INR"
+            
             if ap["currency"] == "INR":
                 ap["total_capital"] = cap_input / usd_inr
                 ap["cash_balance"] = cap_input / usd_inr
@@ -183,11 +186,12 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = cap_input
                 ap["cash_balance"] = cap_input
             ap["active_grids"] = []
-            ap["logs"].append(f"Engine Started ({curr_mode})")
+            ap["logs"].append(f"Engine Started in {curr_mode} Mode")
             st.rerun()
     else:
-        st.success(f"✅ AI Engine Active (Updated: {dt.datetime.now(IST).strftime('%H:%M:%S')})")
+        st.success(f"✅ AI Engine Active (Last Update: {dt.datetime.now(IST).strftime('%H:%M:%S')})")
         
+        # Metrics
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
@@ -205,11 +209,10 @@ def show_ai_autopilot_page():
         st.markdown("---")
         st.subheader("💼 Active Grids")
         if ap['active_grids']:
-            # EXPANDED COLUMNS FOR COMPLETENESS
+            # Expanded Table for Completeness
             c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 0.8])
-            c1.markdown("**Asset**"); c2.markdown("**Entry**"); c3.markdown("**Qty**")
-            c4.markdown("**Current**"); c5.markdown("**Inv**"); c6.markdown("**Val**")
-            c7.markdown("**PnL**"); c8.markdown("**Act**")
+            c1.write("**Asset**"); c2.write("**Entry**"); c3.write("**Qty**"); c4.write("**Price**")
+            c5.write("**Inv**"); c6.write("**Val**"); c7.write("**PnL**"); c8.write("**Act**")
             
             for i, g in enumerate(ap['active_grids']):
                 cp = get_current_price(g['coin'])
@@ -231,24 +234,18 @@ def show_ai_autopilot_page():
                     send_telegram_alert(f"🚨 Auto-Pilot Closed: {g['coin']} PnL: ${gpnl:.2f}")
                     ap['active_grids'].pop(i)
                     st.rerun()
-            
-            # LIVE ORDERS
-            st.markdown("---")
-            st.markdown("### 📋 Grid Orders")
-            for g in ap['active_grids']:
-                with st.expander(f"Orders for {g['coin']}"):
-                    st.table(pd.DataFrame(g.get('orders', [])))
+                
+                with st.expander(f"View Orders for {g['coin']}"):
+                    if 'orders' in g: st.table(pd.DataFrame(g['orders']))
         else:
             st.info("Scanning for opportunities...")
             
         st.markdown("---")
         st.subheader("📜 Logs")
-        for log in ap['logs'][:5]:
-            st.text(log)
+        for log in ap['logs'][:5]: st.text(log)
             
         if st.button("⏹ Stop Engine"):
-            ap["running"] = False
-            st.rerun()
+            ap["running"] = False; st.rerun()
 
 # --- PAGE: REPORT ---
 def show_crypto_report_page():
@@ -265,7 +262,7 @@ def show_crypto_report_page():
     c1, c2, c3 = st.columns(3)
     c1.metric("Invested (INR)", f"₹{invested*usd_inr:,.0f}")
     c2.metric("Value (INR)", f"₹{curr_val*usd_inr:,.0f}")
-    c3.metric("PnL (INR)", f"₹{pnl*usd_inr:,.0f}")
+    c3.metric("Unrealized PnL", f"₹{pnl*usd_inr:,.0f}")
     
     st.markdown("---")
     st.subheader("🏁 Closed Trades")
