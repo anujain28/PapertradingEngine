@@ -3,11 +3,11 @@ import time
 import streamlit as st
 import datetime as dt
 import random
+import yfinance as yf
 
-# Mock storage for positions
-# In a real app, this should be a database or a thread-safe object
+# Initialize session state for the bot
 if "crypto_positions" not in st.session_state:
-    st.session_state["crypto_positions"] = pd.DataFrame(columns=["symbol", "entry_price", "pnl"])
+    st.session_state["crypto_positions"] = pd.DataFrame(columns=["symbol", "entry_price", "pnl", "timestamp"])
 
 def init_crypto_state():
     if "crypto_status" not in st.session_state:
@@ -15,56 +15,59 @@ def init_crypto_state():
     if "crypto_running" not in st.session_state:
         st.session_state["crypto_running"] = False
 
-def get_binance_client():
-    return None # Placeholder
-
-def save_binance_config(api_key, secret_key):
-    # In production, save to environmental variables or encrypted file
-    st.session_state["binance_api"] = api_key
-    st.session_state["binance_secret"] = secret_key
-
-def load_binance_config():
-    return st.session_state.get("binance_api"), st.session_state.get("binance_secret")
-
 def get_crypto_positions():
-    # Return the dataframe stored in session state
     return st.session_state.get("crypto_positions", pd.DataFrame())
 
-def get_crypto_trades():
-    return pd.DataFrame() # Return empty for now
+def fetch_live_price(symbol):
+    """Fetches real-time price from YFinance"""
+    try:
+        data = yf.Ticker(symbol).history(period="1d")
+        if not data.empty:
+            return data["Close"].iloc[-1]
+    except:
+        pass
+    return None
 
 def crypto_trading_loop():
     """
-    Background loop that simulates trading.
+    Background loop that paper trades using LIVE market data.
     """
+    # Assets to trade
+    target_coins = ["BTC-USD", "ETH-USD", "SOL-USD"]
+    
     while True:
         if st.session_state.get("crypto_running", False):
-            # SIMULATION LOGIC:
-            # 1. Randomly "buy" a coin if we don't have it
-            # 2. Update PNL of existing coins
+            st.session_state["crypto_status"] = "Scanning Live Market Prices..."
             
-            # Update Status
-            st.session_state["crypto_status"] = "Scanning Market..."
-            time.sleep(1)
+            # 1. Pick a random coin to analyze
+            coin = random.choice(target_coins)
             
-            # Simulate a Trade Entry
-            coins = ["BTC", "ETH", "SOL"]
-            chosen = random.choice(coins)
+            # 2. Fetch REAL Live Price
+            price = fetch_live_price(coin)
             
-            # Simple logic: If we don't have it, add it (Simulation)
-            current_df = st.session_state.get("crypto_positions", pd.DataFrame(columns=["symbol", "entry_price", "pnl"]))
+            if price:
+                current_df = st.session_state.get("crypto_positions", pd.DataFrame())
+                
+                # SIMULATION RULE: If we don't have this coin, BUY it.
+                # In a real bot, you would check RSI/MACD here.
+                already_owned = False
+                if not current_df.empty and "symbol" in current_df.columns:
+                    if coin in current_df["symbol"].values:
+                        already_owned = True
+                
+                if not already_owned:
+                    new_trade = pd.DataFrame([{
+                        "symbol": coin, 
+                        "entry_price": float(f"{price:.2f}"), 
+                        "pnl": 0.0, # Starts at 0
+                        "timestamp": dt.datetime.now().strftime("%H:%M:%S")
+                    }])
+                    
+                    st.session_state["crypto_positions"] = pd.concat([current_df, new_trade], ignore_index=True)
+                    st.session_state["crypto_status"] = f"Bought {coin} at ${price:.2f}"
             
-            if chosen not in current_df['symbol'].values if not current_df.empty else True:
-                new_row = pd.DataFrame([{
-                    "symbol": chosen, 
-                    "entry_price": random.randint(100, 50000), 
-                    "pnl": 0.0,
-                    "timestamp": dt.datetime.now().strftime("%H:%M:%S")
-                }])
-                st.session_state["crypto_positions"] = pd.concat([current_df, new_row], ignore_index=True)
-                st.session_state["crypto_status"] = f"Bought {chosen}"
+            # Sleep to simulate analysis time and prevent API spam
+            time.sleep(10)
             
         else:
-            st.session_state["crypto_status"] = "Idle"
-        
-        time.sleep(5) # Wait 5 seconds before next check
+            time.sleep(2)
