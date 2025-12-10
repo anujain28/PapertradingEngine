@@ -1,10 +1,10 @@
 # app.py
-# Updated AI Stock Analysis Bot + Paper Trading
-# - Fixes SyntaxError in background loop
-# - Scans NIFTY200 universe every 15 minutes (configurable)
-# - Excludes tickers from Dhan & Shoonya portfolios
-# - Re-checks charts/algos at time-of-buy and buys only if signal strength >= threshold
-# - All paper-trading features (logs, fees, taxes, trailing, never sell losers) preserved
+# Full AI Stock Analysis Bot + Paper Trading (updated)
+# - Auto-start paper trading by default
+# - "Stop trading for today" persisted control
+# - Improved font visibility for laptop
+# - Universe scan every scan_interval_min, exclude Dhan/Shoonya, re-check charts before buy
+# - Booked trades & PnL logs persisted in data/
 
 import os
 import sys
@@ -26,39 +26,42 @@ import pytz
 import requests
 
 # -------------------------
-# CONFIGURATION / DEFAULTS
+# PATHS & CONFIGURATION / DEFAULTS
 # -------------------------
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Universe & exclude files
 NIFTY200_CSV = DATA_DIR / "nifty200_yahoo.csv"
 DHAN_POS_FILE = DATA_DIR / "dhan_positions.json"
 SHOONYA_POS_FILE = DATA_DIR / "shoonya_positions.json"
 
+# Persistence files
 PAPER_PNL_FILE = DATA_DIR / "paper_pnl_log.csv"
 BOOKED_TRADES_FILE = DATA_DIR / "paper_booked_trades.csv"
 PAPER_POS_FILE = DATA_DIR / "paper_positions.json"
 PAPER_CONFIG_FILE = DATA_DIR / "paper_config.json"
+STOP_FOR_TODAY_FILE = DATA_DIR / "stop_for_today.json"
 
 # Defaults - change as needed in UI
 DEFAULT_BASE_CAPITAL = 100_000.0           # ₹1 Lakh
 DEFAULT_MAX_USAGE_PCT = 0.40               # 40%
 DEFAULT_MAX_POSITIONS = 5
 DEFAULT_TARGET_PCT = 0.04                  # 4% target
-DEFAULT_AUTO_START = False
+DEFAULT_AUTO_START = True                  # Auto-start by default
 DEFAULT_AUTO_START_TIME = dtime(hour=9, minute=30)   # 09:30 IST
 DEFAULT_EOD_CAPTURE_TIME = dtime(hour=15, minute=30) # 15:30 IST
 DEFAULT_TRAILING_BASE = 0.05               # default trailing pct (adaptive)
 DEFAULT_BROKERAGE_PCT = 0.0003             # 0.03%
 DEFAULT_GST_PCT = 0.18
-DEFAULT_STT_PCT = 0.001                     # 0.1%
-DEFAULT_EXCHANGE_PCT = 0.00003              # 0.003%
-DEFAULT_STAMP_PCT = 0.00015                 # 0.015%
+DEFAULT_STT_PCT = 0.001                    # 0.1%
+DEFAULT_EXCHANGE_PCT = 0.00003             # 0.003%
+DEFAULT_STAMP_PCT = 0.00015                # 0.015%
 DEFAULT_PLATFORM_FEE = 10.0
-DEFAULT_TAX_PCT = 0.15                      # 15% STCG
+DEFAULT_TAX_PCT = 0.15                     # 15% STCG
 
-# New scan params
+# Scan params
 DEFAULT_SCAN_INTERVAL_MIN = 15
 DEFAULT_BUY_SCORE_THRESHOLD = 65.0
 
@@ -66,11 +69,11 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # Keep-alive / self ping
 KEEP_ALIVE = True
-SELF_URL = "https://airobots.streamlit.app/"   # user provided; can be changed in UI
+SELF_URL = "https://paisado.streamlit.app/"   # user provided app URL
 SELF_PING_INTERVAL_SEC = 4 * 60  # 4 minutes
 
 # -------------------------
-# Utilities
+# Helpers
 # -------------------------
 def now_ist():
     return datetime.now(IST)
@@ -104,8 +107,32 @@ def append_csv(path: Path, row: Dict):
     else:
         df.to_csv(path, mode="w", header=True, index=False)
 
+# Stop-for-today helpers
+def read_stop_for_today():
+    try:
+        if STOP_FOR_TODAY_FILE.exists():
+            with STOP_FOR_TODAY_FILE.open("r") as f:
+                data = json.load(f)
+            if data.get("date") != date.today().isoformat():
+                return {"date": date.today().isoformat(), "stopped": False}
+            return {"date": data.get("date"), "stopped": bool(data.get("stopped", False))}
+    except Exception:
+        pass
+    return {"date": date.today().isoformat(), "stopped": False}
+
+def set_stop_for_today(flag: bool):
+    try:
+        payload = {"date": date.today().isoformat(), "stopped": bool(flag)}
+        with STOP_FOR_TODAY_FILE.open("w") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+def is_stopped_today() -> bool:
+    return bool(read_stop_for_today().get("stopped", False))
+
 # -------------------------
-# Load stock universe
+# Universe loader
 # -------------------------
 def load_nifty200_universe():
     symbols = []
@@ -122,7 +149,7 @@ def load_nifty200_universe():
             symbols = []
             mapping = {}
     if not symbols:
-        # fallback sample (small set)
+        # fallback sample list
         symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "LT"]
     return symbols, mapping
 
@@ -137,7 +164,7 @@ def nse_yf_symbol(sym: str) -> str:
     return s if s.endswith(".NS") else f"{s}.NS"
 
 # -------------------------
-# Fetch data & indicators
+# Data fetch & indicators
 # -------------------------
 def fetch_yf_df(symbol: str, period: str = "60d", interval: str = "15m"):
     try:
@@ -187,7 +214,6 @@ def compute_indicators(df: pd.DataFrame):
         out['ema21'] = float(ta.trend.ema_indicator(c, window=21).iloc[-1])
     except Exception:
         out['ema9'] = out['ema21'] = np.nan
-    # on-balance volume
     try:
         obv = ta.volume.OnBalanceVolumeIndicator(c, df["Volume"]).on_balance_volume()
         out['obv'] = safe_float(obv.iloc[-1])
@@ -197,19 +223,9 @@ def compute_indicators(df: pd.DataFrame):
     return out
 
 # -------------------------
-# Scoring function (used for buy decision)
+# Signal scoring
 # -------------------------
 def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_price: Optional[float]=None):
-    """
-    Returns a 0-100 score representing signal strength.
-    Heuristics:
-      - RSI low (<40) adds score
-      - MACD bullish (macd > macd_sig) adds score
-      - EMA9 > EMA21 adds score
-      - Volume spike adds score
-      - OBV accumulation adds score
-      - Bollinger squeeze breakout adds some score
-    """
     score = 0.0
     try:
         rsi = ind.get("rsi", np.nan)
@@ -248,10 +264,9 @@ def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_pric
 
         bbw = ind.get("bb_width", np.nan)
         if not np.isnan(bbw):
-            if bbw < 5:  # small width then breakout is more meaningful
+            if bbw < 5:
                 score += 6
 
-        # price proximity to entry (if provided) - reward if fresh breakout above entry or support
         if entry_price:
             latest_price = float(df["Close"].iloc[-1])
             dist = (latest_price - entry_price) / entry_price * 100.0
@@ -263,7 +278,7 @@ def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_pric
     return min(100.0, score)
 
 # -------------------------
-# Paper trading engine (same as before, cleaned)
+# Paper Trader
 # -------------------------
 class PaperTrader:
     def __init__(self):
@@ -396,7 +411,7 @@ class PaperTrader:
 paper = PaperTrader()
 
 # -------------------------
-# Scheduler with scan & buy logic
+# Scheduler with scanning & buy logic
 # -------------------------
 class PaperTradingScheduler:
     def __init__(self):
@@ -438,18 +453,6 @@ class PaperTradingScheduler:
         if cfg:
             self.config.update(cfg)
 
-    def start(self):
-        with self.lock:
-            if self.running:
-                return
-            self.running = True
-            self.thread = threading.Thread(target=self._loop, daemon=True)
-            self.thread.start()
-
-    def stop(self):
-        with self.lock:
-            self.running = False
-
     def _get_exclusion_list(self):
         exc = set()
         try:
@@ -470,20 +473,28 @@ class PaperTradingScheduler:
             pass
         return exc
 
+    def start(self):
+        with self.lock:
+            if self.running:
+                return
+            # Respect stop-for-today flag
+            if is_stopped_today():
+                return
+            self.running = True
+            self.thread = threading.Thread(target=self._loop, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        with self.lock:
+            self.running = False
+
     def _scan_and_buy_cycle(self):
-        """
-        Scan universe, exclude Dhan/Shoonya and already-held positions, compute scores, pick top candidates.
-        For each candidate: re-check indicators & score live; if >= buy_score_threshold -> buy (paper)
-        """
         try:
             universe = STOCK_UNIVERSE.copy()
-            # uppercase
             universe = [u.upper() for u in universe]
             exclusion = self._get_exclusion_list()
-            # exclude current open positions
             open_pos = paper.load_open_positions() or {}
             exclusion.update([k.upper() for k in open_pos.keys()])
-            # filter
             candidates = [s for s in universe if s.upper() not in exclusion]
             if not candidates:
                 return
@@ -503,41 +514,38 @@ class PaperTradingScheduler:
             if not scored:
                 return
 
-            # pick top few by score
             scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
             picks = []
-            for sym, score, ind, df in scored_sorted[: int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS) * 2)]:  # pick some extras to re-validate later
+            # pick extra candidates to revalidate with live intraday
+            pool_count = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS) * 3)
+            for sym, score, ind, df in scored_sorted[:pool_count]:
                 picks.append({"ticker": sym, "score": score, "ind": ind, "df": df})
 
-            # Now re-validate each top pick with fresh intraday data and indicators before buying
             to_buy = []
             for p in picks:
                 sym = p["ticker"]
-                # get fresh short-term data (intraday) to check live conditions
                 df_live = fetch_yf_df(sym, period="5d", interval="5m")
                 if df_live is None or df_live.empty:
                     continue
                 ind_live = compute_indicators(df_live)
                 live_score = compute_signal_score_from_indicators(ind_live, df_live)
                 threshold = float(self.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD))
-                # require live score >= threshold and previous scan score > some baseline
                 if live_score >= threshold and p["score"] >= (threshold - 5):
-                    # candidate price: last close
                     price = float(df_live["Close"].iloc[-1])
                     to_buy.append({"ticker": sym, "price": price, "source": "scan", "score": live_score})
 
-            # allocate available capital across up to max_positions
             if not to_buy:
                 return
 
-            # respect max positions and available capital
             max_positions = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS))
-            to_buy = to_buy[:max_positions]
-
-            # run buy
+            # limit to remaining slots
+            open_count = len(paper.load_open_positions() or {})
+            slots = max_positions - open_count
+            if slots <= 0:
+                return
+            to_buy = to_buy[:slots]
             self.run_selection_and_buy(to_buy)
         except Exception:
-            # swallow exceptions in scheduler to keep it running
             traceback.print_exc()
 
     def run_selection_and_buy(self, picks: List[Dict], config_override: Dict = None):
@@ -575,9 +583,13 @@ class PaperTradingScheduler:
         scan_interval_min = int(self.config.get("scan_interval_min", DEFAULT_SCAN_INTERVAL_MIN))
         while self.running:
             try:
+                if is_stopped_today():
+                    time.sleep(10)
+                    continue
+
                 now = now_ist()
 
-                # update peaks for all open positions
+                # update existing positions
                 positions = paper.load_open_positions() or {}
                 for tck, pos in list(positions.items()):
                     try:
@@ -587,10 +599,8 @@ class PaperTradingScheduler:
                         last_price = float(df["Close"].iloc[-1])
                         paper.update_peak_and_mark(tck, last_price)
 
-                        # evaluate trailing & AI-book for existing positions
                         inds = compute_indicators(df)
                         inds['peak'] = pos.get("peak", pos["entry_price"])
-                        # trailing pct adaptive
                         atr_pct = inds.get("atr_pct", np.nan)
                         if not np.isnan(atr_pct):
                             if atr_pct >= 3.0:
@@ -604,7 +614,6 @@ class PaperTradingScheduler:
                         else:
                             trailing_pct = self.config.get("trailing_base", DEFAULT_TRAILING_BASE)
 
-                        # trailing trigger check
                         can_sell, reason = paper.eligible_to_sell(tck, last_price, trailing_pct)
                         if can_sell:
                             fees_cfg = {
@@ -618,14 +627,8 @@ class PaperTradingScheduler:
                             }
                             paper.sell(tck, last_price, fees_cfg, reason=f"trailing_{int(trailing_pct*100)}")
                         else:
-                            # compute book-now score
-                            # time to eod
-                            eod_dt = datetime.combine(now.date(), self.config.get("eod_capture_time", DEFAULT_EOD_CAPTURE_TIME))
-                            eod_dt = IST.localize(eod_dt)
-                            time_to_eod = max(0, int((eod_dt - now).total_seconds() // 60))
                             book_score = compute_signal_score_from_indicators(inds, df, entry_price=pos.get("entry_price"))
                             if book_score >= float(self.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD)):
-                                # only book if profitable
                                 if last_price > pos.get("entry_price"):
                                     fees_cfg = {
                                         "brokerage_pct": self.config["brokerage_pct"],
@@ -640,19 +643,17 @@ class PaperTradingScheduler:
                     except Exception:
                         continue
 
-                # run a full universe scan every scan_interval_min
+                # perform universe scan on interval
                 if last_scan_ts is None or (now - last_scan_ts).total_seconds() >= scan_interval_min * 60:
                     self._scan_and_buy_cycle()
                     last_scan_ts = now
 
-                # EOD snapshot capture (only near EOD)
+                # EOD snapshot capture near EOD
                 now_time = now.time()
                 eod_time = self.config.get("eod_capture_time", DEFAULT_EOD_CAPTURE_TIME)
-                # capture within +/- 65 seconds of eod_time
                 eod_dt = datetime.combine(now.date(), eod_time)
                 eod_dt = IST.localize(eod_dt)
                 if abs((now - eod_dt).total_seconds()) < 65:
-                    # compute unrealised and realized today
                     unreal = 0.0
                     for tck, pos in (paper.load_open_positions() or {}).items():
                         try:
@@ -683,54 +684,17 @@ class PaperTradingScheduler:
                         "ticker": "SNAPSHOT",
                         "net_realized": snapshot["realized_today"]
                     })
-                    # sleep to avoid multiple captures within the window
                     time.sleep(70)
 
                 time.sleep(10)
-
             except Exception:
-                # log and sleep a bit to avoid tight exception loop
                 traceback.print_exc()
                 time.sleep(5)
-
-    def run_selection_and_buy_manual(self, picks: List[Dict]):
-        return self.run_selection_and_buy(picks)
-
-    def run_selection_and_buy(self, picks: List[Dict], config_override: Dict = None):
-        # same as earlier implementation
-        try:
-            cfg = self.config
-            base = float(cfg["base_capital"])
-            max_used = base * float(cfg["max_usage_pct"])
-            current_used = sum([v.get("invested", 0.0) for v in (paper.load_open_positions() or {}).values()])
-            available_for_new = max(0.0, max_used - current_used)
-            picks = picks[: int(cfg["max_positions"])]
-            if not picks or available_for_new <= 0:
-                return []
-
-            per_pick_alloc = available_for_new / len(picks)
-            bought = []
-            for p in picks:
-                t = p.get("ticker")
-                price = float(p.get("price", p.get("cmp", 0.0)))
-                if price <= 0:
-                    continue
-                qty = int(math.floor(per_pick_alloc / price))
-                if qty <= 0:
-                    continue
-                invested = qty * price
-                b = paper.buy(t, per_pick_alloc, price, qty, source=p.get("source","scan"))
-                if b:
-                    bought.append({"ticker": t, "qty": qty, "buy_price": price, "invested": invested})
-            return bought
-        except Exception:
-            traceback.print_exc()
-            return []
 
 paper_scheduler = PaperTradingScheduler()
 
 # -------------------------
-# Self-pinger (keep alive)
+# Self-pinger (keep alive) thread
 # -------------------------
 def self_ping_loop(url: str, interval: int, enabled: bool):
     if not enabled or not url:
@@ -742,23 +706,48 @@ def self_ping_loop(url: str, interval: int, enabled: bool):
             pass
         time.sleep(interval)
 
-if KEEP_ALIVE and SELF_URL:
-    tping = threading.Thread(target=self_ping_loop, args=(SELF_URL, SELF_PING_INTERVAL_SEC, KEEP_ALIVE), daemon=True)
-    tping.start()
+# start internal pinger if enabled and configured URL present
+try:
+    pinger_url = paper_scheduler.config.get("self_url", SELF_URL) or SELF_URL
+    if paper_scheduler.config.get("keep_alive", KEEP_ALIVE) and pinger_url:
+        tping = threading.Thread(target=self_ping_loop, args=(pinger_url, SELF_PING_INTERVAL_SEC, True), daemon=True)
+        tping.start()
+except Exception:
+    pass
+
+# Auto-start scheduler when app loads if configured and not stopped for today
+try:
+    if "paper_running" not in st.session_state:
+        st.session_state["paper_running"] = False
+    if paper_scheduler.config.get("auto_start", DEFAULT_AUTO_START) and (not is_stopped_today()):
+        if not paper_scheduler.running:
+            paper_scheduler.start()
+            st.session_state["paper_running"] = True
+except Exception:
+    pass
 
 # -------------------------
-# Streamlit UI
+# Streamlit UI & CSS (fonts)
 # -------------------------
 st.set_page_config(page_title="🤖 AI Stock Analysis Bot + Paper Trading", page_icon="📈", layout="wide")
-st.markdown("<style> .stApp { background-color: #fbfbf9; } </style>", unsafe_allow_html=True)
-
-# session state defaults
-if "paper_running" not in st.session_state:
-    st.session_state["paper_running"] = False
-if "paper_auto_start" not in st.session_state:
-    st.session_state["paper_auto_start"] = paper_scheduler.config.get("auto_start", DEFAULT_AUTO_START)
-if "base_capital" not in st.session_state:
-    st.session_state["base_capital"] = paper_scheduler.config.get("base_capital", DEFAULT_BASE_CAPITAL)
+# Use system font stack and increase sizes slightly for laptop readability
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"]  {
+        font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial !important;
+    }
+    .stApp {
+        background-color: #fbfbf9;
+    }
+    /* generic increased font sizes - conservative */
+    .stButton>button { font-size:13px; font-weight:600; }
+    .stTextInput>div>label, .stNumberInput>div>label { font-size:13px; }
+    .stMarkdown p, .stMarkdown div { font-size:14px; line-height:1.35; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Sidebar navigation
 NAV_PAGES = [
@@ -782,7 +771,7 @@ with st.sidebar:
 st.markdown('<div style="padding:12px;border-radius:12px;background:linear-gradient(90deg,#4f46e5,#0ea5e9);color:white"><h2>AI Stock Analysis Bot + Paper Trading</h2></div>', unsafe_allow_html=True)
 st.caption(f"Local time: {now_ist().strftime('%d-%m-%Y %I:%M %p')} IST")
 
-# Pages
+# --- Pages ---
 if page == "🔥 Top Stocks":
     st.subheader("🔥 Top Stocks (preview)")
     st.write("Run scans from Paper Trading or use the analyzer to populate recommendations.")
@@ -793,7 +782,6 @@ elif page == "📣 Dividends":
 
 elif page == "📊 Groww":
     st.subheader("📊 Groww Upload (demo)")
-    st.info("Upload Groww CSV to analyze.")
     uploaded = st.file_uploader("Upload Groww portfolio file", type=["csv", "xls", "xlsx"])
     if uploaded:
         try:
@@ -808,7 +796,6 @@ elif page == "🤝 Dhan":
 
 elif page == "🧾 Dhan Stocks Analysis":
     st.subheader("🧾 Dhan Stocks Analysis (demo)")
-    st.info("This page will show Dhan holdings + AI recommendations in full app.")
     df_pos = paper.snapshot_positions_df()
     if df_pos.empty:
         st.info("No paper positions yet. Start Paper Trading to see holdings here.")
@@ -835,24 +822,24 @@ elif page == "🧾 PNL Log":
 
 elif page == "🪙 Paper Trading":
     st.subheader("🪙 Paper Trading Engine")
-    st.markdown("Configure and start the simulator. It scans NIFTY200 every scan interval and buys only if live signal strength >= threshold.")
+    st.markdown("Auto-start enabled by default. You can stop trading for today (persisted) or stop/restart the background scheduler manually.")
 
     # Controls
     c1, c2 = st.columns([2, 3])
     with c1:
-        base_cap = st.number_input("Base capital (₹)", value=float(st.session_state.get("base_capital", DEFAULT_BASE_CAPITAL)), step=1000.0)
-        max_usage = st.slider("Max capital usage (%)", min_value=10, max_value=100, value=int(DEFAULT_MAX_USAGE_PCT*100))/100.0
-        max_pos = st.number_input("Max positions", min_value=1, max_value=10, value=int(DEFAULT_MAX_POSITIONS))
-        target_pct = st.number_input("Target % (per trade)", value=float(DEFAULT_TARGET_PCT*100.0))/100.0
+        base_cap = st.number_input("Base capital (₹)", value=float(paper_scheduler.config.get("base_capital", DEFAULT_BASE_CAPITAL)), step=1000.0)
+        max_usage = st.slider("Max capital usage (%)", min_value=10, max_value=100, value=int(paper_scheduler.config.get("max_usage_pct", DEFAULT_MAX_USAGE_PCT)*100))/100.0
+        max_pos = st.number_input("Max positions", min_value=1, max_value=10, value=int(paper_scheduler.config.get("max_positions", DEFAULT_MAX_POSITIONS)))
+        target_pct = st.number_input("Target % (per trade)", value=float(paper_scheduler.config.get("target_pct", DEFAULT_TARGET_PCT)*100.0))/100.0
     with c2:
-        trailing_base = st.number_input("Default trailing % (fallback)", value=float(DEFAULT_TRAILING_BASE*100.0))/100.0
+        trailing_base = st.number_input("Default trailing % (fallback)", value=float(paper_scheduler.config.get("trailing_base", DEFAULT_TRAILING_BASE)*100.0))/100.0
         scan_interval = st.number_input("Scan interval (minutes)", value=int(paper_scheduler.config.get("scan_interval_min", DEFAULT_SCAN_INTERVAL_MIN)), min_value=5, max_value=60, step=5)
         buy_threshold = st.number_input("Buy score threshold (0-100)", value=float(paper_scheduler.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD)))
-        brokerage_pct = st.number_input("Brokerage %", value=float(DEFAULT_BROKERAGE_PCT*100.0))/100.0
-        stt_pct = st.number_input("STT % (sell)", value=float(DEFAULT_STT_PCT*100.0))/100.0
-        tax_pct = st.number_input("Tax % on gain", value=float(DEFAULT_TAX_PCT*100.0))/100.0
+        brokerage_pct = st.number_input("Brokerage %", value=float(paper_scheduler.config.get("brokerage_pct", DEFAULT_BROKERAGE_PCT)*100.0))/100.0
+        stt_pct = st.number_input("STT % (sell)", value=float(paper_scheduler.config.get("stt_pct", DEFAULT_STT_PCT)*100.0))/100.0
+        tax_pct = st.number_input("Tax % on gain", value=float(paper_scheduler.config.get("tax_pct", DEFAULT_TAX_PCT)*100.0))/100.0
 
-    # apply to scheduler config
+    # apply & persist config
     paper_scheduler.config.update({
         "base_capital": float(base_cap),
         "max_usage_pct": float(max_usage),
@@ -868,32 +855,50 @@ elif page == "🪙 Paper Trading":
     })
     paper_scheduler.save_config()
 
-    # Start / Stop buttons
+    # Start / Stop buttons + stop-for-today persistence
     cola, colb = st.columns(2)
     with cola:
         if st.button("Start Paper Trading"):
-            if not st.session_state["paper_running"]:
-                paper_scheduler.start()
-                st.session_state["paper_running"] = True
-                st.success("Paper Trading started (background scheduler running).")
+            if is_stopped_today():
+                st.warning("Trading disabled for today. Clear 'Stop trading for today' to start.")
             else:
-                st.info("Paper Trading already running.")
+                if not st.session_state.get("paper_running", False):
+                    paper_scheduler.start()
+                    st.session_state["paper_running"] = True
+                    st.success("Paper Trading started (background scheduler running).")
+                else:
+                    st.info("Paper Trading already running.")
     with colb:
         if st.button("Stop Paper Trading"):
-            if st.session_state["paper_running"]:
+            if st.session_state.get("paper_running", False):
                 paper_scheduler.stop()
                 st.session_state["paper_running"] = False
                 st.success("Paper Trading stopped.")
             else:
                 st.info("Paper Trading not running.")
 
-    # Manual quick selection run (uses live scan)
+    st.markdown("### Day controls")
+    stop_col1, stop_col2 = st.columns([1,1])
+    with stop_col1:
+        if st.button("⛔ Stop trading for today (persist)"):
+            paper_scheduler.stop()
+            st.session_state["paper_running"] = False
+            set_stop_for_today(True)
+            st.success("Trading stopped for today. It will not auto-start again until tomorrow.")
+    with stop_col2:
+        if st.button("✅ Clear Stop (allow auto-start)"):
+            set_stop_for_today(False)
+            st.success("Cleared 'Stop for today'. App may auto-start per config on next reload or next scheduled auto-start.")
+
+    st.write(f"Trading running: {st.session_state.get('paper_running', False)}  •  Stop-for-today: {is_stopped_today()}")
+
+    # Manual quick scan and buy
     if st.button("Run universe scan now (manual)"):
-        st.info("Running quick scan (this may take some seconds)...")
+        st.info("Running quick scan (may take some seconds)...")
         paper_scheduler._scan_and_buy_cycle()
         st.success("Manual scan done. Check Open Positions / Booked Trades.")
 
-    # show open positions
+    # open positions
     st.markdown("### Open Paper Positions")
     df_open = paper.snapshot_positions_df()
     if df_open.empty:
@@ -926,15 +931,14 @@ elif page == "🪙 Paper Trading":
 
 elif page == "⚙️ Configuration":
     st.subheader("⚙️ Configuration & Keep-Alive")
-    st.markdown("Configure app behavior. Keep the self-url set to your deployed app if you want the internal pinger to try to keep it awake.")
+    st.markdown("Configure app behavior. Set Self URL to your deployed app if you want the internal pinger to use it.")
     self_url = st.text_input("Self URL (for keep-alive pinger)", value=paper_scheduler.config.get("self_url", SELF_URL))
     keep_alive = st.checkbox("Enable internal self-ping keep-alive (may not prevent host sleep on free tiers)", value=paper_scheduler.config.get("keep_alive", KEEP_ALIVE))
     if st.button("Save Keep-Alive"):
         paper_scheduler.config["self_url"] = self_url
         paper_scheduler.config["keep_alive"] = bool(keep_alive)
         paper_scheduler.save_config()
-        st.success("Saved keep-alive config (note: external Uptime pinger is more reliable).")
+        st.success("Saved keep-alive config. External pings (UptimeRobot) are more reliable on Streamlit Community Cloud.")
 
 st.markdown("---")
-st.caption("Paper Trading is simulation-only. The engine will not place real orders. Check booked trades & PnL log from the sidebar.")
-
+st.caption("Paper Trading is simulation-only. This app will attempt to auto-start paper trading on load. Use 'Stop trading for today' to pause autoschedules for the rest of the day.")
