@@ -1,1084 +1,485 @@
 # app.py
-# AI Stock Analysis Bot + Paper Trading
-# - Multi-URL keep-alive pinger (airobots, airobotsmf, paisado)
-# - Paper trading scans NIFTY200 CSV for picks (excludes Dhan/Shoonya/open positions)
-# - Run Full Scan button visible across the app (populates BTST/Intraday/Weekly/Monthly recommendations)
-# - BTST/Intraday/Weekly/Monthly pages show scan results
-# - Auto-start paper trading (unless stopped for today) and Stop-for-today control
-# - Improved fonts and light grey background for laptop readability
-# Note: paper trading is simulated only.
-
-import os
-import json
 import time
-import math
 import threading
-import traceback
-from datetime import datetime, date, time as dtime, timedelta
-from pathlib import Path
-from typing import List, Dict, Optional
+import datetime as dt
+import sqlite3
+from typing import Dict, List, Optional
 
-import pandas as pd
-import numpy as np
-import streamlit as st
-import yfinance as yf
-import ta
 import pytz
 import requests
+import pandas as pd
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh  # pip install streamlit-autorefresh
+from telegram.ext import Application
 
-# -------------------------
-# PATHS & CONFIGURATION / DEFAULTS
-# -------------------------
-ROOT = Path(__file__).parent
-DATA_DIR = ROOT / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# Universe & exclude files
-NIFTY200_CSV = DATA_DIR / "nifty200_yahoo.csv"
-DHAN_POS_FILE = DATA_DIR / "dhan_positions.json"
-SHOONYA_POS_FILE = DATA_DIR / "shoonya_positions.json"
-
-# Persistence files
-PAPER_PNL_FILE = DATA_DIR / "paper_pnl_log.csv"
-BOOKED_TRADES_FILE = DATA_DIR / "paper_booked_trades.csv"
-PAPER_POS_FILE = DATA_DIR / "paper_positions.json"
-PAPER_CONFIG_FILE = DATA_DIR / "paper_config.json"
-STOP_FOR_TODAY_FILE = DATA_DIR / "stop_for_today.json"
-
-# Defaults - change as needed in UI
-DEFAULT_BASE_CAPITAL = 100_000.0           # ₹1 Lakh
-DEFAULT_MAX_USAGE_PCT = 0.40               # 40%
-DEFAULT_MAX_POSITIONS = 5
-DEFAULT_TARGET_PCT = 0.04                  # 4% target
-DEFAULT_AUTO_START = True                  # Auto-start by default
-DEFAULT_AUTO_START_TIME = dtime(hour=9, minute=30)   # 09:30 IST
-DEFAULT_EOD_CAPTURE_TIME = dtime(hour=15, minute=30) # 15:30 IST
-DEFAULT_TRAILING_BASE = 0.05               # default trailing pct (adaptive)
-DEFAULT_BROKERAGE_PCT = 0.0003             # 0.03%
-DEFAULT_GST_PCT = 0.18
-DEFAULT_STT_PCT = 0.001                    # 0.1%
-DEFAULT_EXCHANGE_PCT = 0.00003             # 0.003%
-DEFAULT_STAMP_PCT = 0.00015                # 0.015%
-DEFAULT_PLATFORM_FEE = 10.0
-DEFAULT_TAX_PCT = 0.15                     # 15% STCG
-
-# Scan params
-DEFAULT_SCAN_INTERVAL_MIN = 15
-DEFAULT_BUY_SCORE_THRESHOLD = 65.0
-
+# ---------------------------
+# CONFIG
+# ---------------------------
 IST = pytz.timezone("Asia/Kolkata")
+TRADING_START = dt.time(9, 30)
+TRADING_END = dt.time(15, 30)
 
-# Keep-alive / default ping URLs & interval (5-10 minutes)
-DEFAULT_PING_URLS = [
-    "https://airobots.streamlit.app/",
-    "https://airobotsmf.streamlit.app/",
-    "https://paisado.streamlit.app/",
-]
-DEFAULT_PING_INTERVAL_SEC = 5 * 60  # default 5 minutes
+START_CAPITAL = 100000.0
+MAX_UTILIZATION = 0.60  # 60% of capital in the market
 
-# -------------------------
-# Helpers
-# -------------------------
-def now_ist():
-    return datetime.now(IST)
+TRAIL_PCT_DEFAULT = 0.02  # 2% trailing stop
 
-def safe_float(x, default=np.nan):
+AIROBOTS_URL = "https://airobots.streamlit.app/"
+DB_PATH = "paper_trades.db"
+
+# Telegram config: put these in .streamlit/secrets.toml in production
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+# ---------------------------
+# GLOBAL STATE (IN MEMORY)
+# ---------------------------
+if "state" not in st.session_state:
+    st.session_state.state = {
+        "capital": START_CAPITAL,
+        "equity": START_CAPITAL,
+        "positions": {},   # symbol -> position dict
+    }
+
+if "loop_started" not in st.session_state:
+    st.session_state.loop_started = False
+
+if "report_time" not in st.session_state:
+    # Default daily report time 16:00 IST
+    st.session_state.report_time = dt.time(16, 0)
+
+# ---------------------------
+# DB INIT
+# ---------------------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            side TEXT,
+            qty INTEGER,
+            price REAL,
+            timestamp TEXT,
+            pnl REAL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            timestamp TEXT,
+            equity REAL,
+            capital REAL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+# ---------------------------
+# MARKET DATA / AIROBOTS
+# ---------------------------
+def fetch_top5_from_airobots() -> List[Dict]:
+    """
+    Try to read the first HTML table from AI Robots app,
+    and pick top 5 rows by 'Profit %'.
+    Adjust the table index / column names as per your app.
+    """
     try:
-        return float(x)
+        resp = requests.get(AIROBOTS_URL, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(resp.text)
+        if not tables:
+            return []
+        df = tables[0].copy()
+        # Try to standardize column names
+        df.columns = [str(c).strip() for c in df.columns]
+        # Guess column names (change if needed)
+        profit_col = None
+        symbol_col = None
+        for c in df.columns:
+            lc = c.lower()
+            if "profit" in lc and "%" in lc:
+                profit_col = c
+            if "symbol" in lc or "stock" in lc or "ticker" in lc:
+                symbol_col = c
+        if profit_col is None or symbol_col is None:
+            return []
+        df = df.sort_values(profit_col, ascending=False).head(5)
+        df.rename(columns={symbol_col: "Symbol", profit_col: "Profit %"}, inplace=True)
+        return df.to_dict(orient="records")
     except Exception:
-        return default
+        return []
 
-def save_json(path: Path, obj):
-    try:
-        with path.open("w") as f:
-            json.dump(obj, f, default=str, indent=2)
-    except Exception:
-        pass
 
-def load_json(path: Path):
-    try:
-        if path.exists():
-            with path.open("r") as f:
-                return json.load(f)
-    except Exception:
-        pass
+def get_ltp(symbol: str) -> Optional[float]:
+    """
+    TODO: Implement real LTP using your broker / NSE API.
+    For now this dummy version returns None (no trading).
+    """
+    # Example:
+    # url = f"https://your-price-api?symbol={symbol}"
+    # ...
     return None
 
-def append_csv(path: Path, row: Dict):
-    df = pd.DataFrame([row])
-    if path.exists():
-        df.to_csv(path, mode="a", header=False, index=False)
-    else:
-        df.to_csv(path, mode="w", header=True, index=False)
 
-# Stop-for-today helpers
-def read_stop_for_today():
-    try:
-        if STOP_FOR_TODAY_FILE.exists():
-            with STOP_FOR_TODAY_FILE.open("r") as f:
-                data = json.load(f)
-            if data.get("date") != date.today().isoformat():
-                return {"date": date.today().isoformat(), "stopped": False}
-            return {"date": data.get("date"), "stopped": bool(data.get("stopped", False))}
-    except Exception:
-        pass
-    return {"date": date.today().isoformat(), "stopped": False}
+# ---------------------------
+# TRADING ENGINE
+# ---------------------------
+def recompute_equity():
+    state = st.session_state.state
+    mtm = 0.0
+    for pos in state["positions"].values():
+        mtm += pos["qty"] * pos["last_price"]
+    state["equity"] = state["capital"] + mtm
 
-def set_stop_for_today(flag: bool):
-    try:
-        payload = {"date": date.today().isoformat(), "stopped": bool(flag)}
-        with STOP_FOR_TODAY_FILE.open("w") as f:
-            json.dump(payload, f)
-    except Exception:
-        pass
 
-def is_stopped_today() -> bool:
-    return bool(read_stop_for_today().get("stopped", False))
+def persist_trades(trades: List[Dict]):
+    if not trades:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.DataFrame(trades)
+    df.to_sql("trades", conn, if_exists="append", index=False)
+    conn.close()
 
-# -------------------------
-# Universe loader (CSV)
-# -------------------------
-def load_nifty200_universe():
-    symbols = []
-    mapping = {}
-    if NIFTY200_CSV.exists():
-        try:
-            df = pd.read_csv(NIFTY200_CSV)
-            # detect common column names
-            sym_col = None
-            yf_col = None
-            for c in df.columns:
-                if c.strip().upper() in ["SYMBOL", "TICKER", "SYMBOLS", "SECURITY"]:
-                    sym_col = c
-                if c.strip().upper() in ["YF_TICKER", "YF", "YAHOO", "YF_TICKER"]:
-                    yf_col = c
-            if sym_col:
-                df[sym_col] = df[sym_col].astype(str).str.strip().str.upper()
-                symbols = df[sym_col].dropna().unique().tolist()
-            if sym_col and yf_col:
-                mapping = dict(zip(df[sym_col].astype(str).str.strip().str.upper(), df[yf_col].astype(str).str.strip()))
-        except Exception:
-            symbols = []
-            mapping = {}
-    if not symbols:
-        # fallback sample list if CSV missing
-        symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "LT"]
-    return symbols, mapping
 
-STOCK_UNIVERSE, STOCK_YF_MAP = load_nifty200_universe()
+def persist_equity_snapshot(now: dt.datetime):
+    state = st.session_state.state
+    conn = sqlite3.connect(DB_PATH)
+    row = {
+        "date": now.date().isoformat(),
+        "timestamp": now.isoformat(),
+        "equity": state["equity"],
+        "capital": state["capital"],
+    }
+    pd.DataFrame([row]).to_sql("equity_snapshots", conn, if_exists="append", index=False)
+    conn.close()
 
-def nse_yf_symbol(sym: str) -> str:
-    if not sym:
-        return ""
-    s = str(sym).strip().upper()
-    if s in STOCK_YF_MAP:
-        return STOCK_YF_MAP[s]
-    return s if s.endswith(".NS") else f"{s}.NS"
 
-# -------------------------
-# Data fetch & indicators
-# -------------------------
-def fetch_yf_df(symbol: str, period: str = "60d", interval: str = "15m"):
-    try:
-        t = yf.Ticker(nse_yf_symbol(symbol))
-        df = t.history(period=period, interval=interval, auto_adjust=True)
-        return df
-    except Exception:
-        return pd.DataFrame()
+def realize_profit(symbol: str, exit_price: float, now: dt.datetime, batch_trades: List[Dict]):
+    state = st.session_state.state
+    if symbol not in state["positions"]:
+        return
+    pos = state["positions"][symbol]
+    qty = pos["qty"]
+    entry = pos["entry_price"]
+    pnl = (exit_price - entry) * qty
 
-def compute_indicators(df: pd.DataFrame):
-    out = {}
-    if df is None or df.empty:
-        return out
-    c = df["Close"]
-    h = df["High"] if "High" in df else c
-    l = df["Low"] if "Low" in df else c
-    try:
-        out['rsi'] = ta.momentum.rsi(c, window=14).iloc[-1]
-    except Exception:
-        out['rsi'] = np.nan
-    try:
-        macd = ta.trend.MACD(c)
-        out['macd'] = safe_float(macd.macd().iloc[-1])
-        out['macd_sig'] = safe_float(macd.macd_signal().iloc[-1])
-        out['macd_diff'] = safe_float(macd.macd_diff().iloc[-1])
-    except Exception:
-        out['macd'] = out['macd_sig'] = out['macd_diff'] = np.nan
-    try:
-        atr = ta.volatility.average_true_range(h, l, c, window=14).iloc[-1]
-        out['atr'] = safe_float(atr)
-        out['atr_pct'] = safe_float(atr) / float(c.iloc[-1]) * 100.0 if c.iloc[-1] else np.nan
-    except Exception:
-        out['atr'] = out['atr_pct'] = np.nan
-    try:
-        bb = ta.volatility.BollingerBands(c, window=20, window_dev=2)
-        out['bb_width'] = safe_float(bb.bollinger_hband().iloc[-1] - bb.bollinger_lband().iloc[-1]) / float(c.iloc[-1]) * 100.0
-    except Exception:
-        out['bb_width'] = np.nan
-    try:
-        vol = df["Volume"] if "Volume" in df else pd.Series(dtype=float)
-        out['vol'] = float(vol.iloc[-1]) if not vol.empty else np.nan
-        out['vol_avg20'] = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else np.nan
-    except Exception:
-        out['vol'] = out['vol_avg20'] = np.nan
-    try:
-        out['ema9'] = float(ta.trend.ema_indicator(c, window=9).iloc[-1])
-        out['ema21'] = float(ta.trend.ema_indicator(c, window=21).iloc[-1])
-    except Exception:
-        out['ema9'] = out['ema21'] = np.nan
-    try:
-        obv = ta.volume.OnBalanceVolumeIndicator(c, df["Volume"]).on_balance_volume()
-        out['obv'] = safe_float(obv.iloc[-1])
-        out['obv_sma10'] = safe_float(obv.rolling(10).mean().iloc[-1])
-    except Exception:
-        out['obv'] = out['obv_sma10'] = np.nan
-    return out
+    state["capital"] += qty * exit_price
+    batch_trades.append(
+        {
+            "symbol": symbol,
+            "side": "SELL",
+            "qty": qty,
+            "price": exit_price,
+            "timestamp": now.isoformat(),
+            "pnl": pnl,
+        }
+    )
+    del state["positions"][symbol]
 
-# -------------------------
-# Scoring function (used for buy decision & recommendations)
-# -------------------------
-def compute_signal_score_from_indicators(ind: Dict, df: pd.DataFrame, entry_price: Optional[float]=None):
-    score = 0.0
-    try:
-        rsi = ind.get("rsi", np.nan)
-        if not np.isnan(rsi):
-            if rsi < 30:
-                score += 22
-            elif rsi < 40:
-                score += 14
-            elif rsi < 50:
-                score += 6
 
-        macd = ind.get("macd", np.nan)
-        macd_sig = ind.get("macd_sig", np.nan)
-        macd_diff = ind.get("macd_diff", np.nan)
-        if not np.isnan(macd) and not np.isnan(macd_sig):
-            if macd > macd_sig and macd_diff > 0:
-                score += 20
+def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
+    state = st.session_state.state
+    to_exit = []
 
-        ema9 = ind.get("ema9", np.nan)
-        ema21 = ind.get("ema21", np.nan)
-        if not np.isnan(ema9) and not np.isnan(ema21):
-            if ema9 > ema21:
-                score += 12
+    for sym, pos in list(state["positions"].items()):
+        ltp = get_ltp(sym)
+        if ltp is None:
+            # If no price, carry forward without change
+            continue
 
-        vol = ind.get("vol", np.nan)
-        vol20 = ind.get("vol_avg20", np.nan)
-        if not np.isnan(vol) and not np.isnan(vol20):
-            if vol > vol20 * 1.5:
-                score += 12
+        pos["last_price"] = ltp
+        if ltp > pos["max_price"]:
+            pos["max_price"] = ltp
 
-        obv = ind.get("obv", np.nan)
-        obv_sma = ind.get("obv_sma10", np.nan)
-        if not np.isnan(obv) and not np.isnan(obv_sma):
-            if obv > obv_sma:
-                score += 8
+        trail_pct = pos.get("trail_pct", TRAIL_PCT_DEFAULT)
+        trail_stop = pos["max_price"] * (1 - trail_pct)
+        # No loss rule: only exit if ltp >= entry_price
+        min_exit_price = max(trail_stop, pos["entry_price"])
+        if ltp >= min_exit_price:
+            to_exit.append((sym, ltp))
 
-        bbw = ind.get("bb_width", np.nan)
-        if not np.isnan(bbw):
-            if bbw < 5:
-                score += 6
+    for sym, exit_price in to_exit:
+        realize_profit(sym, exit_price, now, batch_trades)
 
-        if entry_price:
-            latest_price = float(df["Close"].iloc[-1])
-            dist = (latest_price - entry_price) / entry_price * 100.0
-            if dist > 0:
-                score += min(10, dist) * 0.5
 
-    except Exception:
-        score = 0.0
-    return min(100.0, score)
+def rebalance_entries(top5: List[Dict], now: dt.datetime, batch_trades: List[Dict]):
+    if not top5:
+        return
+    state = st.session_state.state
+    usable_capital = START_CAPITAL * MAX_UTILIZATION
+    invested_value = sum(p["qty"] * p["last_price"] for p in state["positions"].values())
+    available_for_new = max(0.0, usable_capital - invested_value)
 
-# -------------------------
-# Paper Trader (persisted positions & sell/buy logic)
-# -------------------------
-class PaperTrader:
-    def __init__(self):
-        self.positions = load_json(PAPER_POS_FILE) or {}
-        self.booked_file = BOOKED_TRADES_FILE
-        self.pnl_file = PAPER_PNL_FILE
-        self.lock = threading.Lock()
+    if available_for_new <= 0:
+        return
 
-    def persist_positions(self):
-        save_json(PAPER_POS_FILE, self.positions)
+    per_stock_alloc = available_for_new / len(top5)
 
-    def snapshot_positions_df(self) -> pd.DataFrame:
-        if not self.positions:
-            return pd.DataFrame()
-        rows = []
-        for t, v in self.positions.items():
-            rows.append({
-                "Ticker": t,
-                "Qty": v.get("qty"),
-                "EntryPrice": v.get("entry_price"),
-                "Invested": v.get("invested"),
-                "Peak": v.get("peak", v.get("entry_price")),
-                "EntryTime": v.get("entry_time"),
-                "Source": v.get("source", "auto")
-            })
-        return pd.DataFrame(rows)
+    for row in top5:
+        sym = str(row.get("Symbol")).strip()
+        if not sym:
+            continue
+        if sym in state["positions"]:
+            continue
 
-    def buy(self, ticker: str, alloc: float, price: float, qty: int, source: str = "auto"):
-        with self.lock:
-            if qty <= 0:
-                return None
-            invested = price * qty
-            self.positions[ticker] = {
-                "entry_price": float(price),
-                "qty": int(qty),
-                "invested": float(invested),
-                "peak": float(price),
-                "entry_time": datetime.utcnow().isoformat(),
-                "source": source,
-            }
-            self.persist_positions()
-            return self.positions[ticker]
+        ltp = get_ltp(sym)
+        if ltp is None or ltp <= 0:
+            continue
 
-    def update_peak_and_mark(self, ticker: str, price: float):
-        with self.lock:
-            pos = self.positions.get(ticker)
-            if not pos:
-                return
-            if price > pos.get("peak", pos["entry_price"]):
-                pos["peak"] = float(price)
-            self.positions[ticker] = pos
-            self.persist_positions()
+        qty = int(per_stock_alloc // ltp)
+        if qty <= 0:
+            continue
 
-    def eligible_to_sell(self, ticker: str, price: float, trailing_pct: float):
-        pos = self.positions.get(ticker)
-        if not pos:
-            return False, "no_position"
-        entry = pos["entry_price"]
-        if price <= entry:
-            return False, "in_loss_no_sell"
-        peak = pos.get("peak", entry)
-        if price <= peak * (1 - trailing_pct):
-            return True, "trailing_trigger"
-        return False, "no_trigger"
+        cost = qty * ltp
+        if state["capital"] < cost:
+            continue
 
-    def sell(self, ticker: str, price: float, fees_cfg: Dict, reason: str = "auto-trail"):
-        with self.lock:
-            pos = self.positions.get(ticker)
-            if not pos:
-                return None
-            qty = int(pos["qty"])
-            invested = float(pos["invested"])
-            sell_turnover = price * qty
-            gross_profit = sell_turnover - invested
-
-            brokerage = sell_turnover * fees_cfg.get("brokerage_pct", 0.0003)
-            gst = brokerage * fees_cfg.get("gst_pct", 0.18)
-            stt = sell_turnover * fees_cfg.get("stt_pct", 0.001)
-            exchange = sell_turnover * fees_cfg.get("exchange_pct", 0.00003)
-            stamp = sell_turnover * fees_cfg.get("stamp_pct", 0.00015)
-            platform_fee = fees_cfg.get("platform_fee", 10.0)
-            fees_sum = brokerage + gst + stt + exchange + stamp + platform_fee
-
-            tax = max(0.0, gross_profit) * fees_cfg.get("tax_pct", 0.15)
-
-            net_realized = gross_profit - fees_sum - tax
-
-            booked = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "ticker": ticker,
+        state["capital"] -= cost
+        pos = {
+            "symbol": sym,
+            "qty": qty,
+            "entry_price": ltp,
+            "last_price": ltp,
+            "max_price": ltp,
+            "trail_pct": TRAIL_PCT_DEFAULT,
+            "open_date": now.date().isoformat(),
+        }
+        state["positions"][sym] = pos
+        batch_trades.append(
+            {
+                "symbol": sym,
+                "side": "BUY",
                 "qty": qty,
-                "entry_price": pos["entry_price"],
-                "sell_price": float(price),
-                "invested": invested,
-                "turnover": sell_turnover,
-                "gross_profit": gross_profit,
-                "brokerage": brokerage,
-                "gst": gst,
-                "stt": stt,
-                "exchange_fee": exchange,
-                "stamp_duty": stamp,
-                "platform_fee": platform_fee,
-                "fees_sum": fees_sum,
-                "tax": tax,
-                "net_realized": net_realized,
-                "reason": reason
+                "price": ltp,
+                "timestamp": now.isoformat(),
+                "pnl": 0.0,
             }
-            try:
-                append_csv(Path(self.booked_file), booked)
-                append_csv(Path(self.pnl_file), {
-                    "date": date.today().isoformat(),
-                    "timestamp": booked["timestamp"],
-                    "ticker": ticker,
-                    "net_realized": net_realized,
-                    "gross_profit": gross_profit
-                })
-            except Exception:
-                pass
+        )
 
-            try:
-                del self.positions[ticker]
-            except Exception:
-                pass
-            self.persist_positions()
-            return booked
 
-    def load_open_positions(self):
-        return self.positions
-
-paper = PaperTrader()
-
-# -------------------------
-# Scheduler with scanning & buy logic
-# -------------------------
-class PaperTradingScheduler:
-    def __init__(self):
-        self.running = False
-        self.thread = None
-        self.lock = threading.Lock()
-        self.config = {
-            "base_capital": DEFAULT_BASE_CAPITAL,
-            "max_usage_pct": DEFAULT_MAX_USAGE_PCT,
-            "max_positions": DEFAULT_MAX_POSITIONS,
-            "target_pct": DEFAULT_TARGET_PCT,
-            "trailing_base": DEFAULT_TRAILING_BASE,
-            "brokerage_pct": DEFAULT_BROKERAGE_PCT,
-            "gst_pct": DEFAULT_GST_PCT,
-            "stt_pct": DEFAULT_STT_PCT,
-            "exchange_pct": DEFAULT_EXCHANGE_PCT,
-            "stamp_pct": DEFAULT_STAMP_PCT,
-            "platform_fee": DEFAULT_PLATFORM_FEE,
-            "tax_pct": DEFAULT_TAX_PCT,
-            "auto_start": DEFAULT_AUTO_START,
-            "auto_start_time": DEFAULT_AUTO_START_TIME,
-            "eod_capture_time": DEFAULT_EOD_CAPTURE_TIME,
-            "max_positions": DEFAULT_MAX_POSITIONS,
-            "self_url": DEFAULT_PING_URLS[0],
-            "keep_alive": True,
-            "scan_interval_min": DEFAULT_SCAN_INTERVAL_MIN,
-            "buy_score_threshold": DEFAULT_BUY_SCORE_THRESHOLD,
-            "ping_urls": DEFAULT_PING_URLS,
-            "ping_interval_sec": DEFAULT_PING_INTERVAL_SEC
-        }
-        self.load_config()
-
-    def config_path(self):
-        return PAPER_CONFIG_FILE
-
-    def save_config(self):
-        save_json(self.config_path(), self.config)
-
-    def load_config(self):
-        cfg = load_json(self.config_path())
-        if cfg:
-            self.config.update(cfg)
-
-    def _get_exclusion_list(self):
-        exc = set()
-        try:
-            d = load_json(DHAN_POS_FILE)
-            if isinstance(d, dict):
-                exc.update([k.upper() for k in d.keys()])
-            elif isinstance(d, list):
-                exc.update([str(x).upper() for x in d])
-        except Exception:
-            pass
-        try:
-            s = load_json(SHOONYA_POS_FILE)
-            if isinstance(s, dict):
-                exc.update([k.upper() for k in s.keys()])
-            elif isinstance(s, list):
-                exc.update([str(x).upper() for x in s])
-        except Exception:
-            pass
-        return exc
-
-    def start(self):
-        with self.lock:
-            if self.running:
-                return
-            if is_stopped_today():
-                return
-            self.running = True
-            self.thread = threading.Thread(target=self._loop, daemon=True)
-            self.thread.start()
-
-    def stop(self):
-        with self.lock:
-            self.running = False
-
-    def _scan_and_buy_cycle(self):
-        try:
-            universe = STOCK_UNIVERSE.copy()
-            universe = [u.upper() for u in universe]
-            exclusion = self._get_exclusion_list()
-            open_pos = paper.load_open_positions() or {}
-            exclusion.update([k.upper() for k in open_pos.keys()])
-            candidates = [s for s in universe if s.upper() not in exclusion]
-            if not candidates:
-                return
-
-            scored = []
-            for sym in candidates:
-                try:
-                    df = fetch_yf_df(sym, period="90d", interval="1d")
-                    if df is None or df.empty or len(df) < 30:
-                        continue
-                    ind = compute_indicators(df)
-                    score = compute_signal_score_from_indicators(ind, df)
-                    scored.append((sym, score, ind, df))
-                except Exception:
-                    continue
-
-            if not scored:
-                return
-
-            scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
-            picks = []
-            pool_count = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS) * 3)
-            for sym, score, ind, df in scored_sorted[:pool_count]:
-                picks.append({"ticker": sym, "score": score, "ind": ind, "df": df})
-
-            to_buy = []
-            for p in picks:
-                sym = p["ticker"]
-                df_live = fetch_yf_df(sym, period="5d", interval="5m")
-                if df_live is None or df_live.empty:
-                    continue
-                ind_live = compute_indicators(df_live)
-                live_score = compute_signal_score_from_indicators(ind_live, df_live)
-                threshold = float(self.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD))
-                if live_score >= threshold and p["score"] >= (threshold - 5):
-                    price = float(df_live["Close"].iloc[-1])
-                    to_buy.append({"ticker": sym, "price": price, "source": "scan", "score": live_score})
-
-            if not to_buy:
-                return
-
-            max_positions = int(self.config.get("max_positions", DEFAULT_MAX_POSITIONS))
-            open_count = len(paper.load_open_positions() or {})
-            slots = max_positions - open_count
-            if slots <= 0:
-                return
-            to_buy = to_buy[:slots]
-            self.run_selection_and_buy(to_buy)
-        except Exception:
-            traceback.print_exc()
-
-    def run_selection_and_buy(self, picks: List[Dict], config_override: Dict = None):
-        try:
-            cfg = self.config
-            base = float(cfg["base_capital"])
-            max_used = base * float(cfg["max_usage_pct"])
-            current_used = sum([v.get("invested", 0.0) for v in (paper.load_open_positions() or {}).values()])
-            available_for_new = max(0.0, max_used - current_used)
-            picks = picks[: int(cfg["max_positions"])]
-            if not picks or available_for_new <= 0:
-                return []
-
-            per_pick_alloc = available_for_new / len(picks)
-            bought = []
-            for p in picks:
-                t = p.get("ticker")
-                price = float(p.get("price", p.get("cmp", 0.0)))
-                if price <= 0:
-                    continue
-                qty = int(math.floor(per_pick_alloc / price))
-                if qty <= 0:
-                    continue
-                invested = qty * price
-                b = paper.buy(t, per_pick_alloc, price, qty, source=p.get("source","scan"))
-                if b:
-                    bought.append({"ticker": t, "qty": qty, "buy_price": price, "invested": invested})
-            return bought
-        except Exception:
-            traceback.print_exc()
-            return []
-
-    def _loop(self):
-        last_scan_ts = None
-        scan_interval_min = int(self.config.get("scan_interval_min", DEFAULT_SCAN_INTERVAL_MIN))
-        while self.running:
-            try:
-                if is_stopped_today():
-                    time.sleep(10)
-                    continue
-
-                now = now_ist()
-
-                # update existing positions
-                positions = paper.load_open_positions() or {}
-                for tck, pos in list(positions.items()):
-                    try:
-                        df = fetch_yf_df(tck, period="5d", interval="5m")
-                        if df is None or df.empty:
-                            continue
-                        last_price = float(df["Close"].iloc[-1])
-                        paper.update_peak_and_mark(tck, last_price)
-
-                        inds = compute_indicators(df)
-                        inds['peak'] = pos.get("peak", pos["entry_price"])
-                        atr_pct = inds.get("atr_pct", np.nan)
-                        if not np.isnan(atr_pct):
-                            if atr_pct >= 3.0:
-                                trailing_pct = 0.05
-                            elif atr_pct >= 2.0:
-                                trailing_pct = 0.04
-                            elif atr_pct >= 1.0:
-                                trailing_pct = 0.03
-                            else:
-                                trailing_pct = 0.02
-                        else:
-                            trailing_pct = self.config.get("trailing_base", DEFAULT_TRAILING_BASE)
-
-                        can_sell, reason = paper.eligible_to_sell(tck, last_price, trailing_pct)
-                        if can_sell:
-                            fees_cfg = {
-                                "brokerage_pct": self.config["brokerage_pct"],
-                                "gst_pct": self.config["gst_pct"],
-                                "stt_pct": self.config["stt_pct"],
-                                "exchange_pct": self.config["exchange_pct"],
-                                "stamp_pct": self.config["stamp_pct"],
-                                "platform_fee": self.config["platform_fee"],
-                                "tax_pct": self.config["tax_pct"]
-                            }
-                            paper.sell(tck, last_price, fees_cfg, reason=f"trailing_{int(trailing_pct*100)}")
-                        else:
-                            book_score = compute_signal_score_from_indicators(inds, df, entry_price=pos.get("entry_price"))
-                            if book_score >= float(self.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD)):
-                                if last_price > pos.get("entry_price"):
-                                    fees_cfg = {
-                                        "brokerage_pct": self.config["brokerage_pct"],
-                                        "gst_pct": self.config["gst_pct"],
-                                        "stt_pct": self.config["stt_pct"],
-                                        "exchange_pct": self.config["exchange_pct"],
-                                        "stamp_pct": self.config["stamp_pct"],
-                                        "platform_fee": self.config["platform_fee"],
-                                        "tax_pct": self.config["tax_pct"]
-                                    }
-                                    paper.sell(tck, last_price, fees_cfg, reason=f"ai_early_book_{int(book_score)}")
-                    except Exception:
-                        continue
-
-                # perform universe scan on interval
-                if last_scan_ts is None or (now - last_scan_ts).total_seconds() >= scan_interval_min * 60:
-                    self._scan_and_buy_cycle()
-                    last_scan_ts = now
-
-                # EOD snapshot capture near EOD
-                now_time = now.time()
-                eod_time = self.config.get("eod_capture_time", DEFAULT_EOD_CAPTURE_TIME)
-                eod_dt = datetime.combine(now.date(), eod_time)
-                eod_dt = IST.localize(eod_dt)
-                if abs((now - eod_dt).total_seconds()) < 65:
-                    unreal = 0.0
-                    for tck, pos in (paper.load_open_positions() or {}).items():
-                        try:
-                            df = fetch_yf_df(tck, period="5d", interval="5m")
-                            if df is None or df.empty:
-                                continue
-                            last_price = float(df["Close"].iloc[-1])
-                            unreal += (last_price * pos["qty"] - pos["invested"])
-                        except Exception:
-                            continue
-                    realized_today = 0.0
-                    try:
-                        if Path(self.pnl_file).exists():
-                            pnl_df = pd.read_csv(self.pnl_file)
-                            realized_today = float(pnl_df[pnl_df['date'] == date.today().isoformat()]['net_realized'].sum())
-                    except Exception:
-                        realized_today = 0.0
-                    snapshot = {
-                        "date": date.today().isoformat(),
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "realized_today": realized_today,
-                        "unrealised": unreal,
-                        "total_capital": float(self.config["base_capital"]) + realized_today + unreal
-                    }
-                    append_csv(Path(self.pnl_file), {
-                        "date": snapshot["date"],
-                        "timestamp": snapshot["timestamp"],
-                        "ticker": "SNAPSHOT",
-                        "net_realized": snapshot["realized_today"]
-                    })
-                    time.sleep(70)
-
-                time.sleep(10)
-            except Exception:
-                traceback.print_exc()
-                time.sleep(5)
-
-paper_scheduler = PaperTradingScheduler()
-
-# -------------------------
-# Multi-URL pinger thread (pings configured URLs at interval)
-# -------------------------
-def multi_ping_loop(urls: List[str], interval_sec: int, enabled: bool):
-    if not enabled or not urls:
-        return
-    while True:
-        for u in urls:
-            try:
-                requests.get(u, timeout=10)
-            except Exception:
-                pass
-            time.sleep(1)  # small gap between pings
-        time.sleep(max(60, interval_sec))
-
-# start pinger with configured list (can be updated in UI)
-try:
-    cfg_urls = paper_scheduler.config.get("ping_urls", DEFAULT_PING_URLS)
-    cfg_interval = int(paper_scheduler.config.get("ping_interval_sec", DEFAULT_PING_INTERVAL_SEC))
-    if paper_scheduler.config.get("keep_alive", True) and cfg_urls:
-        tping = threading.Thread(target=multi_ping_loop, args=(cfg_urls, cfg_interval, True), daemon=True)
-        tping.start()
-except Exception:
-    pass
-
-# Auto-start scheduler when app loads if configured and not stopped for today
-try:
-    if "paper_running" not in st.session_state:
-        st.session_state["paper_running"] = False
-    if paper_scheduler.config.get("auto_start", DEFAULT_AUTO_START) and (not is_stopped_today()):
-        if not paper_scheduler.running:
-            paper_scheduler.start()
-            st.session_state["paper_running"] = True
-except Exception:
-    pass
-
-# -------------------------
-# Full-scan analyzer (populates recommendations used by BTST/Intraday/Weekly/Monthly pages)
-# -------------------------
-def analyze_ticker_for_period(ticker: str, period_type: str) -> Optional[Dict]:
-    cfgs = {
-        'BTST': {'period': '10d', 'interval': '15m'},
-        'Intraday': {'period': '5d', 'interval': '15m'},
-        'Weekly': {'period': '90d', 'interval': '1d'},
-        'Monthly': {'period': '1y', 'interval': '1d'}
-    }
-    if period_type not in cfgs:
-        return None
-    cfg = cfgs[period_type]
-    try:
-        df = fetch_yf_df(ticker, period=cfg['period'], interval=cfg['interval'])
-        if df is None or df.empty or len(df) < 10:
-            return None
-        ind = compute_indicators(df)
-        score = compute_signal_score_from_indicators(ind, df)
-        price = float(df["Close"].iloc[-1])
-        target = round(price * (1 + paper_scheduler.config.get("target_pct", DEFAULT_TARGET_PCT)), 2)
-        if score >= 75:
-            rec = "BUY"
-        elif score >= 50:
-            rec = "HOLD"
-        else:
-            rec = "SELL"
-        return {
-            "ticker": ticker,
-            "price": round(price, 2),
-            "score": round(score, 1),
-            "target": target,
-            "recommendation": rec,
-            "period": period_type,
-            "indicators": ind
-        }
-    except Exception:
-        return None
-
-def run_full_scan(max_per_period: int = 20):
-    periods = ['BTST', 'Intraday', 'Weekly', 'Monthly']
-    recs_map = {p: [] for p in periods}
-    universe = STOCK_UNIVERSE.copy()
-    universe = [u.upper() for u in universe]
-    total = len(universe)
-    bar = st.progress(0)
-    txt = st.empty()
-    for i, tck in enumerate(universe):
-        txt.text(f"Scanning {i+1}/{total}: {tck}")
-        for p in periods:
-            res = analyze_ticker_for_period(tck, p)
-            if res:
-                recs_map[p].append(res)
-        bar.progress((i + 1) / total)
-    for p in periods:
-        recs_map[p] = sorted(recs_map[p], key=lambda x: x.get("score", 0), reverse=True)[:max_per_period]
-    st.session_state['recommendations'] = recs_map
-    bar.empty()
-    txt.empty()
-    return recs_map
-
-if 'recommendations' not in st.session_state:
-    st.session_state['recommendations'] = {'BTST': [], 'Intraday': [], 'Weekly': [], 'Monthly': []}
-
-# -------------------------
-# Streamlit UI & CSS (fonts & grey background)
-# -------------------------
-st.set_page_config(page_title="🤖 AI Stock Analysis Bot + Paper Trading", page_icon="📈", layout="wide")
-st.markdown(
+def run_trading_cycle(now: dt.datetime):
     """
-    <style>
-    html, body, [class*="css"]  {
-        font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial !important;
-    }
-    .stApp {
-        background-color: #f3f4f6 !important;  /* subtle grey background */
-    }
-    .stButton>button { font-size:13px; font-weight:600; }
-    .stTextInput>div>label, .stNumberInput>div>label { font-size:13px; }
-    .stMarkdown p, .stMarkdown div { font-size:14px; line-height:1.35; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    One full cycle:
+    - Fetch top 5 from AI Robots
+    - Update prices and trailing stops
+    - Enter new positions if capital available
+    - Persist trades + equity snapshot
+    """
+    batch_trades: List[Dict] = []
 
-# Sidebar navigation
-NAV_PAGES = [
-    "🔥 Top Stocks",
-    "🌙 BTST",
-    "⚡ Intraday",
-    "📆 Weekly",
-    "📅 Monthly",
-    "📣 Dividends",
-    "📊 Groww",
-    "🤝 Dhan",
-    "🧾 Dhan Stocks Analysis",
-    "🧾 PNL Log",
-    "🪙 Paper Trading",
-    "⚙️ Configuration",
-]
-with st.sidebar:
-    page = st.radio("Navigation", NAV_PAGES, index=0)
+    top5 = fetch_top5_from_airobots()
+    update_positions_and_trails(now, batch_trades)
+    rebalance_entries(top5, now, batch_trades)
+    recompute_equity()
+    persist_trades(batch_trades)
+    persist_equity_snapshot(now)
 
-# Header: Run Full Scan button visible at top of every view
-st.markdown(
-    '<div style="padding:12px;border-radius:12px;background:linear-gradient(90deg,#4f46e5,#0ea5e9);color:white;display:flex;justify-content:space-between;align-items:center">'
-    '<div><h2 style="margin:0">AI Stock Analysis Bot + Paper Trading</h2>'
-    '<div style="opacity:0.95">NIFTY200 CSV • Multi-timeframe scanner • Paper Trading</div></div>'
-    '<div style="display:flex;gap:8px;align-items:center">'
-    '<form></form>'
-    '</div></div>',
-    unsafe_allow_html=True
-)
 
-col_scan, _ = st.columns([1, 9])
-with col_scan:
-    if st.button("🚀 Run Full Scan (manual)", type="primary"):
-        st.info("Running full scan across NIFTY200. This can take a few minutes.")
-        _ = run_full_scan(max_per_period=20)
-        st.success("Scan complete — recommendations updated for BTST/Intraday/Weekly/Monthly.")
+def trading_loop():
+    """
+    Background loop; runs only on weekdays between 9:30 and 15:30 IST.
+    Sleeps 120 seconds between cycles.
+    """
+    while True:
+        now = dt.datetime.now(IST)
+        if now.weekday() < 5 and TRADING_START <= now.time() <= TRADING_END:
+            run_trading_cycle(now)
+        time.sleep(120)
 
-st.caption(f"Local time: {now_ist().strftime('%d-%m-%Y %I:%M %p')} IST")
 
-# helper to render recs
-def render_reco_table(recs: List[Dict], label: str):
-    if not recs:
-        st.info(f"No recommendations for {label} yet. Run Full Scan.")
+# ---------------------------
+# PNL LOADING
+# ---------------------------
+def load_pnl_frames():
+    conn = sqlite3.connect(DB_PATH)
+    trades = pd.read_sql("SELECT * FROM trades", conn)
+    conn.close()
+
+    if trades.empty:
+        daily = pd.DataFrame(columns=["date", "pnl"])
+        weekly = pd.DataFrame(columns=["week", "pnl"])
+        monthly = pd.DataFrame(columns=["month", "pnl"])
+        return daily, weekly, monthly
+
+    trades["timestamp"] = pd.to_datetime(trades["timestamp"])
+    trades["date"] = trades["timestamp"].dt.date
+
+    daily = trades.groupby("date")["pnl"].sum().reset_index()
+
+    weekly = (
+        trades.groupby(trades["timestamp"].dt.to_period("W"))["pnl"]
+        .sum()
+        .reset_index()
+    )
+    weekly.rename(columns={"timestamp": "week"}, inplace=True)
+
+    monthly = (
+        trades.groupby(trades["timestamp"].dt.to_period("M"))["pnl"]
+        .sum()
+        .reset_index()
+    )
+    monthly.rename(columns={"timestamp": "month"}, inplace=True)
+
+    return daily, weekly, monthly
+
+
+def get_today_pnl(daily_df: pd.DataFrame) -> float:
+    if daily_df.empty:
+        return 0.0
+    today = dt.datetime.now(IST).date()
+    row = daily_df[daily_df["date"] == today]
+    if row.empty:
+        return 0.0
+    return float(row["pnl"].sum())
+
+
+# ---------------------------
+# TELEGRAM SCHEDULER
+# ---------------------------
+async def send_telegram_report(context):
+    daily, weekly, monthly = load_pnl_frames()
+    today_pnl = get_today_pnl(daily)
+    equity = st.session_state.state["equity"]
+    msg = (
+        f"Paper Trading Report\n"
+        f"Date: {dt.datetime.now(IST).date().isoformat()}\n"
+        f"Today's PnL: {today_pnl:.2f}\n"
+        f"Equity: {equity:.2f}"
+    )
+    await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+
+
+async def _start_telegram_jobs():
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    df = pd.DataFrame(recs)
-    df['diff_to_target_pct'] = ((df['target'] - df['price']) / df['target']) * 100.0
-    df = df[['ticker', 'price', 'target', 'diff_to_target_pct', 'score', 'recommendation']]
-    df = df.rename(columns={
-        'ticker': 'Ticker',
-        'price': 'CMP (₹)',
-        'target': 'Recommended Target (₹)',
-        'diff_to_target_pct': 'Diff to Target (%)',
-        'score': 'Score',
-        'recommendation': 'Reco'
-    })
-    st.dataframe(df, use_container_width=True)
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    rt = st.session_state.report_time
+    app.job_queue.run_daily(
+        send_telegram_report,
+        time=dt.time(rt.hour, rt.minute, tzinfo=IST),
+        days=(0, 1, 2, 3, 4),  # Mon–Fri
+    )
+    await app.initialize()
+    await app.start()
+    # This will keep running; in Streamlit hosting, your main process
+    # is usually long-lived.
+    await app.updater.start_polling()
 
-# Pages
-if page == "🔥 Top Stocks":
-    st.subheader("🔥 Top Stocks (combined top from all periods)")
-    combined = []
-    for p in ['BTST', 'Intraday', 'Weekly', 'Monthly']:
-        for r in st.session_state['recommendations'].get(p, [])[:5]:
-            rr = dict(r); rr['period'] = p
-            combined.append(rr)
-    if not combined:
-        st.info("No top stocks yet. Run Full Scan.")
+
+def start_telegram_scheduler_if_needed():
+    if "telegram_started" not in st.session_state:
+        st.session_state.telegram_started = False
+    if st.session_state.telegram_started:
+        return
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    # Fire and forget async loop in background thread
+    def runner():
+        import asyncio
+
+        asyncio.run(_start_telegram_jobs())
+
+    threading.Thread(target=runner, daemon=True).start()
+    st.session_state.telegram_started = True
+
+
+# ---------------------------
+# STREAMLIT UI
+# ---------------------------
+def show_paper_trading_page():
+    st.title("📈 AI Paper Trading Engine")
+
+    # Auto-refresh every 2 minutes
+    st_autorefresh(interval=120_000, key="auto_refresh")
+
+    state = st.session_state.state
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Free Capital", f"₹{state['capital']:.2f}")
+    with col2:
+        st.metric("Equity (Cash + MTM)", f"₹{state['equity']:.2f}")
+
+    positions = list(state["positions"].values())
+    if positions:
+        st.subheader("Open Positions")
+        df_pos = pd.DataFrame(positions)
+        st.dataframe(df_pos, use_container_width=True)
     else:
-        df_comb = pd.DataFrame(combined).sort_values("score", ascending=False)
-        st.dataframe(df_comb[['ticker','price','score','period','recommendation']].rename(columns={'ticker':'Ticker','price':'CMP','score':'Score','period':'Period','recommendation':'Reco'}), use_container_width=True)
+        st.info("No open positions currently. Engine will auto-scan and enter trades during market hours.")
 
-elif page == "🌙 BTST":
-    st.subheader("🌙 BTST Opportunities")
-    render_reco_table(st.session_state['recommendations'].get('BTST', []), "BTST")
+    st.caption(
+        "Engine runs automatically from 9:30 AM to 3:30 PM IST, "
+        "fetches top 5 stocks from AI Robots, uses up to 60% of capital, "
+        "trails profits, and never exits at a loss (positions are carried forward)."
+    )
 
-elif page == "⚡ Intraday":
-    st.subheader("⚡ Intraday Signals")
-    render_reco_table(st.session_state['recommendations'].get('Intraday', []), "Intraday")
 
-elif page == "📆 Weekly":
-    st.subheader("📆 Weekly Swing Ideas")
-    render_reco_table(st.session_state['recommendations'].get('Weekly', []), "Weekly")
+def show_pnl_page():
+    st.title("📊 PNL Log")
 
-elif page == "📅 Monthly":
-    st.subheader("📅 Monthly Position Trades")
-    render_reco_table(st.session_state['recommendations'].get('Monthly', []), "Monthly")
+    daily, weekly, monthly = load_pnl_frames()
 
-elif page == "📣 Dividends":
-    st.subheader("📣 Upcoming Dividends (future only)")
-    st.info("If your NIFTY200 CSV contains upcoming dividend/ex-date columns we will show future dividends here. Otherwise this is a placeholder.")
+    st.subheader("Daily PnL")
+    st.dataframe(daily, use_container_width=True)
 
-elif page == "📊 Groww":
-    st.subheader("📊 Groww Upload (demo)")
-    uploaded = st.file_uploader("Upload Groww portfolio file", type=["csv", "xls", "xlsx"])
-    if uploaded:
-        try:
-            df_up = pd.read_csv(uploaded) if str(uploaded.name).lower().endswith(".csv") else pd.read_excel(uploaded)
-            st.write(df_up.head())
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
+    st.subheader("Weekly PnL")
+    st.dataframe(weekly, use_container_width=True)
 
-elif page == "🤝 Dhan":
-    st.subheader("🤝 Dhan demo")
-    st.info("Dhan integration is supported in full app; this demo shows a placeholder.")
+    st.subheader("Monthly PnL")
+    st.dataframe(monthly, use_container_width=True)
 
-elif page == "🧾 Dhan Stocks Analysis":
-    st.subheader("🧾 Dhan Stocks Analysis (demo)")
-    df_pos = paper.snapshot_positions_df()
-    if df_pos.empty:
-        st.info("No paper positions yet. Start Paper Trading to see holdings here.")
+
+def sidebar_config():
+    st.sidebar.header("⚙️ Configuration")
+
+    # Telegram report time
+    report_time_str = st.sidebar.text_input(
+        "Telegram report time (HH:MM, IST)", value=f"{st.session_state.report_time.hour:02d}:{st.session_state.report_time.minute:02d}"
+    )
+    try:
+        hh, mm = report_time_str.split(":")
+        hh, mm = int(hh), int(mm)
+        st.session_state.report_time = dt.time(hh, mm)
+    except Exception:
+        st.sidebar.warning("Invalid time format. Use HH:MM (e.g. 16:00).")
+
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        st.sidebar.success("Telegram is configured. Daily report will be sent on weekdays.")
     else:
-        st.dataframe(df_pos)
+        st.sidebar.info("Set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID in Streamlit secrets for Telegram reports.")
 
-elif page == "🧾 PNL Log":
-    st.subheader("🧾 Paper Trading PNL Log")
-    if Path(BOOKED_TRADES_FILE).exists():
-        df_booked = pd.read_csv(BOOKED_TRADES_FILE)
-        st.markdown("### Booked Trades (realized)")
-        st.dataframe(df_booked.sort_values("timestamp", ascending=False).head(200))
-        st.download_button("Download Booked Trades CSV", data=df_booked.to_csv(index=False), file_name="booked_trades.csv")
+
+def main():
+    st.set_page_config(page_title="AI Paper Trading", layout="wide")
+    sidebar_config()
+
+    # Start engine loop once
+    if not st.session_state.loop_started:
+        t = threading.Thread(target=trading_loop, daemon=True)
+        t.start()
+        st.session_state.loop_started = True
+
+    # Start Telegram scheduler once
+    start_telegram_scheduler_if_needed()
+
+    page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log"])
+
+    if page == "Paper Trading":
+        show_paper_trading_page()
     else:
-        st.info("No booked trades yet.")
-    if Path(PAPER_PNL_FILE).exists():
-        df_pnl = pd.read_csv(PAPER_PNL_FILE)
-        st.markdown("### PnL Log")
-        st.dataframe(df_pnl.sort_values(["date","timestamp"], ascending=False).head(300))
-        st.download_button("Download PnL Log CSV", data=df_pnl.to_csv(index=False), file_name="paper_pnl_log.csv")
-    else:
-        st.info("No PnL snapshots yet.")
+        show_pnl_page()
 
-elif page == "🪙 Paper Trading":
-    st.subheader("🪙 Paper Trading Engine")
-    st.markdown("Auto-start enabled by default. You can stop trading for today (persisted) or stop/restart the background scheduler manually. The engine scans the CSV universe for picks.")
 
-    # Controls
-    c1, c2 = st.columns([2, 3])
-    with c1:
-        base_cap = st.number_input("Base capital (₹)", value=float(paper_scheduler.config.get("base_capital", DEFAULT_BASE_CAPITAL)), step=1000.0)
-        max_usage = st.slider("Max capital usage (%)", min_value=10, max_value=100, value=int(paper_scheduler.config.get("max_usage_pct", DEFAULT_MAX_USAGE_PCT)*100))/100.0
-        max_pos = st.number_input("Max positions", min_value=1, max_value=10, value=int(paper_scheduler.config.get("max_positions", DEFAULT_MAX_POSITIONS)))
-        target_pct = st.number_input("Target % (per trade)", value=float(paper_scheduler.config.get("target_pct", DEFAULT_TARGET_PCT)*100.0))/100.0
-    with c2:
-        trailing_base = st.number_input("Default trailing % (fallback)", value=float(paper_scheduler.config.get("trailing_base", DEFAULT_TRAILING_BASE)*100.0))/100.0
-        scan_interval = st.number_input("Scan interval (minutes)", value=int(paper_scheduler.config.get("scan_interval_min", DEFAULT_SCAN_INTERVAL_MIN)), min_value=5, max_value=60, step=5)
-        buy_threshold = st.number_input("Buy score threshold (0-100)", value=float(paper_scheduler.config.get("buy_score_threshold", DEFAULT_BUY_SCORE_THRESHOLD)))
-        brokerage_pct = st.number_input("Brokerage %", value=float(paper_scheduler.config.get("brokerage_pct", DEFAULT_BROKERAGE_PCT)*100.0))/100.0
-        stt_pct = st.number_input("STT % (sell)", value=float(paper_scheduler.config.get("stt_pct", DEFAULT_STT_PCT)*100.0))/100.0
-        tax_pct = st.number_input("Tax % on gain", value=float(paper_scheduler.config.get("tax_pct", DEFAULT_TAX_PCT)*100.0))/100.0
-
-    # apply & persist config
-    paper_scheduler.config.update({
-        "base_capital": float(base_cap),
-        "max_usage_pct": float(max_usage),
-        "max_positions": int(max_pos),
-        "target_pct": float(target_pct),
-        "trailing_base": float(trailing_base),
-        "brokerage_pct": float(brokerage_pct),
-        "gst_pct": float(DEFAULT_GST_PCT),
-        "stt_pct": float(stt_pct),
-        "tax_pct": float(tax_pct),
-        "scan_interval_min": int(scan_interval),
-        "buy_score_threshold": float(buy_threshold)
-    })
-    paper_scheduler.save_config()
-
-    # Start / Stop buttons + stop-for-today persistence
-    cola, colb = st.columns(2)
-    with cola:
-        if st.button("Start Paper Trading"):
-            if is_stopped_today():
-                st.warning("Trading disabled for today. Clear 'Stop trading for today' to start.")
-            else:
-                if not st.session_state.get("paper_running", False):
-                    paper_scheduler.start()
-                    st.session_state["paper_running"] = True
-                    st.success("Paper Trading started (background scheduler running).")
-                else:
-                    st.info("Paper Trading already running.")
-    with colb:
-        if st.button("Stop Paper Trading"):
-            if st.session_state.get("paper_running", False):
-                paper_scheduler.stop()
-                st.session_state["paper_running"] = False
-                st.success("Paper Trading stopped.")
-            else:
-                st.info("Paper Trading not running.")
-
-    st.markdown("### Day controls")
-    stop_col1, stop_col2 = st.columns([1,1])
-    with stop_col1:
-        if st.button("⛔ Stop trading for today (persist)"):
-            paper_scheduler.stop()
-            st.session_state["paper_running"] = False
-            set_stop_for_today(True)
-            st.success("Trading stopped for today. It will not auto-start again until tomorrow.")
-    with stop_col2:
-        if st.button("✅ Clear Stop (allow auto-start)"):
-            set_stop_for_today(False)
-            st.success("Cleared 'Stop for today'. App may auto-start per config on next reload or next scheduled auto-start.")
-
-    st.write(f"Trading running: {st.session_state.get('paper_running', False)}  •  Stop-for-today: {is_stopped_today()}")
-
-    # Manual quick scan and buy
-    if st.button("Run universe scan now (manual)"):
-        st.info("Running quick scan (may take some seconds)...")
-        paper_scheduler._scan_and_buy_cycle()
-        st.success("Manual scan done. Check Open Positions / Booked Trades.")
-
-    # open positions
-    st.markdown("### Open Paper Positions")
-    df_open = paper.snapshot_positions_df()
-    if df_open.empty:
-        st.info("No open paper positions.")
-    else:
-        st.dataframe(df_open)
-        if st.button("Force Book All Profitable (manual)"):
-            pos = paper.load_open_positions() or {}
-            cnt = 0
-            for tck, p in list(pos.items()):
-                try:
-                    df = fetch_yf_df(tck, period="5d", interval="5m")
-                    if df is None or df.empty:
-                        continue
-                    last = float(df["Close"].iloc[-1])
-                    if last > p["entry_price"]:
-                        booked = paper.sell(tck, last, {
-                            "brokerage_pct": paper_scheduler.config["brokerage_pct"],
-                            "gst_pct": paper_scheduler.config["gst_pct"],
-                            "stt_pct": paper_scheduler.config["stt_pct"],
-                            "exchange_pct": paper_scheduler.config["exchange_pct"],
-                            "stamp_pct": paper_scheduler.config["stamp_pct"],
-                            "platform_fee": paper_scheduler.config["platform_fee"],
-                            "tax_pct": paper_scheduler.config["tax_pct"],
-                        }, reason="manual_force_book")
-                        cnt += 1
-                except Exception:
-                    continue
-            st.success(f"Booked {cnt} profitable positions (manual).")
-
-elif page == "⚙️ Configuration":
-    st.subheader("⚙️ Configuration & Keep-Alive")
-    st.markdown("Configure app behavior. Set ping URLs and ping interval to keep apps alive (5–10 minutes recommended).")
-    urls_text = st.text_area("Ping URLs (comma separated)", value=",".join(paper_scheduler.config.get("ping_urls", DEFAULT_PING_URLS)))
-    ping_interval_min = st.number_input("Ping interval (minutes, 5-10)", min_value=5, max_value=10, value=int(paper_scheduler.config.get("ping_interval_sec", DEFAULT_PING_INTERVAL_SEC)//60))
-    keep_alive = st.checkbox("Enable internal multi-URL ping keep-alive", value=paper_scheduler.config.get("keep_alive", True))
-    if st.button("Save Keep-Alive & Ping settings"):
-        try:
-            urls = [u.strip() for u in urls_text.split(",") if u.strip()]
-            paper_scheduler.config["ping_urls"] = urls
-            paper_scheduler.config["ping_interval_sec"] = int(ping_interval_min * 60)
-            paper_scheduler.config["keep_alive"] = bool(keep_alive)
-            paper_scheduler.save_config()
-            st.success("Saved ping configuration. New pinger will use these URLs on next reload.")
-        except Exception as e:
-            st.error(f"Could not save ping config: {e}")
-
-st.markdown("---")
-st.caption("Paper Trading is simulation-only. The engine will attempt to auto-start paper trading on load unless 'Stop trading for today' is active. Use Run Full Scan to refresh recommendations used by BTST/Intraday/Weekly/Monthly pages.")
+if __name__ == "__main__":
+    main()
