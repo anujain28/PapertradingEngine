@@ -156,7 +156,7 @@ if "autopilot" not in st.session_state:
         "currency": "USDT",
         "total_capital": 0.0,
         "cash_balance": 0.0,
-        "positions": [], # List of dicts: {coin, entry, qty, time}
+        "active_grids": [], # List of grid bot dicts
         "logs": []
     }
 
@@ -328,11 +328,11 @@ def show_crypto_dashboard_page():
         st.error("Data unavailable.")
 
 # ---------------------------
-# PAGE 5: AI AUTO-PILOT (ENHANCED)
+# PAGE 5: AI AUTO-PILOT (GRID ENABLED)
 # ---------------------------
 def show_ai_autopilot_page():
-    st.title("🚀 AI Auto-Pilot Engine")
-    st.caption("Auto-scans the market and trades 24/7 with zero human intervention.")
+    st.title("🚀 AI Auto-Pilot (Grid Enabled)")
+    st.caption("Auto-scans and launches Grid Bots automatically for volatility harvesting.")
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
     usd_inr = st.session_state["usd_inr"]
@@ -366,36 +366,64 @@ def show_ai_autopilot_page():
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
-        open_pos_val = sum([p['qty'] * get_current_price(p['coin']) for p in ap['positions']])
-        total_val_usd = ap['cash_balance'] + open_pos_val
+        # Calculate Active Grids Value
+        invested_in_grids = sum([g['invest'] for g in ap['active_grids']])
+        
+        # Current Value (Simplified: Cash + Current Value of Grids)
+        # Note: Ideally we check live PnL of each grid
+        grid_current_val = 0.0
+        for g in ap['active_grids']:
+             cp = get_current_price(g['coin'])
+             grid_current_val += (g['qty'] * cp)
+
+        total_val_usd = ap['cash_balance'] + grid_current_val
         total_pnl_usd = total_val_usd - ap['total_capital']
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Value", f"{curr_sym}{total_val_usd * conv_factor:,.2f}")
         m2.metric("Cash Balance", f"{curr_sym}{ap['cash_balance'] * conv_factor:,.2f}")
-        m3.metric("Invested", f"{curr_sym}{open_pos_val * conv_factor:,.2f}")
+        m3.metric("Invested (Grids)", f"{curr_sym}{grid_current_val * conv_factor:,.2f}")
         m4.metric("Net PnL", f"{curr_sym}{total_pnl_usd * conv_factor:,.2f}", 
                   delta=f"{(total_pnl_usd/ap['total_capital'])*100:.2f}%")
         
         st.markdown("---")
         
-        # 2. SIMULATED LOGIC
-        if ap['cash_balance'] > (ap['total_capital'] * 0.1): 
+        # 2. AI SCANNER LOGIC (LAUNCHES GRID BOTS)
+        if ap['cash_balance'] > (ap['total_capital'] * 0.2): # Only launch if we have 20% cash
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
-            cp = get_current_price(scan_coin)
-            chance = random.randint(1, 10)
             
-            if chance > 8 and cp > 0: 
-                invest_amt = ap['cash_balance'] * 0.2 
-                qty = invest_amt / cp
-                ap['positions'].append({
-                    "coin": scan_coin, "entry": cp, "qty": qty, 
-                    "time": dt.datetime.now().strftime('%H:%M:%S')
-                })
-                ap['cash_balance'] -= invest_amt
-                ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🟢 BUY SIGNAL: {scan_coin}. Bought ${invest_amt:.2f}")
-            elif chance < 2: 
-                 ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔍 Scanned {scan_coin}. Market Neutral.")
+            # Check if we already have a grid for this coin
+            existing = [g for g in ap['active_grids'] if g['coin'] == scan_coin]
+            
+            if not existing:
+                cp = get_current_price(scan_coin)
+                chance = random.randint(1, 10)
+                
+                if chance > 8 and cp > 0: # 20% chance to find volatility
+                    invest_amt = ap['cash_balance'] * 0.2 # Use 20% of cash for this grid
+                    
+                    # GRID PARAMETERS (SMART SETTINGS)
+                    lower = cp * 0.95
+                    upper = cp * 1.05
+                    qty = invest_amt / cp
+                    
+                    new_grid = {
+                        "coin": scan_coin,
+                        "entry": cp,
+                        "lower": lower,
+                        "upper": upper,
+                        "qty": qty,
+                        "invest": invest_amt,
+                        "grids": 5,
+                        "start_time": dt.datetime.now().strftime('%H:%M:%S')
+                    }
+                    
+                    ap['active_grids'].append(new_grid)
+                    ap['cash_balance'] -= invest_amt
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🤖 DEPLOYED GRID: {scan_coin} (Range: ${lower:.2f}-${upper:.2f})")
+                
+                elif chance < 2: 
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔍 Scanned {scan_coin}. Low Volatility. Skipped.")
         
         if len(ap['logs']) > 5: ap['logs'] = ap['logs'][:5]
         for log in ap['logs']:
@@ -403,17 +431,17 @@ def show_ai_autopilot_page():
             
         st.markdown("---")
         
-        # 3. LIVE POSITIONS TABLE (MANUAL RENDER for STOP BUTTONS)
-        st.subheader("💼 Auto-Pilot Portfolio")
+        # 3. LIVE AUTO-PILOT GRIDS
+        st.subheader("💼 Active Auto-Pilot Grids")
         
-        if ap['positions']:
+        if ap['active_grids']:
             # Headers
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1,1.5,1.5,1])
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1.5,1.5,1.5,1])
             c1.markdown("**Asset**")
-            c2.markdown("**Entry**")
+            c2.markdown("**Range**")
             c3.markdown("**Current**")
-            c4.markdown("**Qty**")
-            c5.markdown("**Invested**")
+            c4.markdown("**Invested**")
+            c5.markdown("**Value**")
             c6.markdown("**Profit/Loss**")
             c7.markdown("**Action**")
             st.markdown("<div style='border-bottom:1px solid #ddd; margin-bottom:10px;'></div>", unsafe_allow_html=True)
@@ -424,47 +452,48 @@ def show_ai_autopilot_page():
             sum_pnl = 0.0
 
             # Rows
-            for i, p in enumerate(ap['positions']):
-                cp = get_current_price(p['coin'])
-                invested = p['qty'] * p['entry']
-                curr_val = p['qty'] * cp
-                pnl = curr_val - invested
+            for i, g in enumerate(ap['active_grids']):
+                cp = get_current_price(g['coin'])
+                curr_val = g['qty'] * cp
+                pnl = curr_val - g['invest']
                 
-                sum_inv += invested
+                sum_inv += g['invest']
                 sum_val += curr_val
                 sum_pnl += pnl
 
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1,1.5,1.5,1])
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1.5,1.5,1.5,1])
                 
-                c1.write(p['coin'].replace("-USD",""))
-                c2.write(f"${p['entry']:.2f}")
+                c1.write(g['coin'].replace("-USD",""))
+                c2.write(f"${g['lower']:.0f}-${g['upper']:.0f}")
                 c3.write(f"${cp:.2f}")
-                c4.write(f"{p['qty']:.4f}")
-                c5.write(f"${invested:.2f}")
+                
+                c4.write(f"${g['invest']:.2f}")
+                c5.write(f"${curr_val:.2f}")
                 
                 pnl_color = "green" if pnl >= 0 else "red"
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
                 # Stop Button
-                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
-                    # Sell immediately
+                if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
+                    # Liquidation
                     ap['cash_balance'] += curr_val
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 MANUAL STOP: Sold {p['coin']} @ ${cp:.2f}")
-                    ap['positions'].pop(i)
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 MANUAL STOP: Closed Grid {g['coin']}. Returned ${curr_val:.2f}")
+                    ap['active_grids'].pop(i)
                     st.rerun()
 
             st.markdown("<div style='border-bottom:1px solid #ddd; margin-top:10px; margin-bottom:10px;'></div>", unsafe_allow_html=True)
             
             # FOOTER SUMMARY
             f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1])
-            f1.write("**PORTFOLIO TOTALS:**")
+            f1.write("**TOTALS (USD):**")
             f2.write(f"**${sum_inv:,.2f}**")
+            f3.write(f"**${sum_val:,.2f}**")
             
             total_pnl_color = "green" if sum_pnl >= 0 else "red"
-            f3.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
+            f4.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
             
         else:
-            st.info("AI is scanning for entry points...")
+            st.info("AI is scanning for volatility opportunities...")
             
         if st.button("⏹ Emergency Stop Engine"):
             ap["running"] = False
@@ -477,7 +506,6 @@ def main():
     apply_custom_style()
     st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
     
-    # --- NEW SIDEBAR STRUCTURE ---
     st.sidebar.title("Navigation")
     
     # 1. Asset Class Selector
