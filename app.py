@@ -53,10 +53,25 @@ def apply_custom_style():
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
         p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* Sidebar */
+        /* Sidebar Container */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
-        section[data-testid="stSidebar"] input { color: black !important; }
+        
+        /* --- SIDEBAR INPUTS (Binance/Telegram Config) --- */
+        /* Input Box Background Black, Text White */
+        section[data-testid="stSidebar"] input { 
+            background-color: #000000 !important; 
+            color: #ffffff !important; 
+            border: 1px solid #555 !important;
+        }
+        /* Focus State */
+        section[data-testid="stSidebar"] input:focus {
+            border-color: #1f77b4 !important;
+        }
+        /* Labels inside sidebar */
+        section[data-testid="stSidebar"] label {
+            color: #ffffff !important;
+        }
         
         /* Metrics & Containers */
         div[data-testid="metric-container"] {
@@ -96,25 +111,30 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* Table / Dataframe Styling Override for Visibility */
-        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
-            color: #000000 !important;
-            background-color: #ffffff !important;
-        }
-        div[data-testid="stTable"] {
-            color: #000000 !important;
-        }
-        
-        /* Expander styling */
+        /* --- EXPANDER & TABLE FIX --- */
         div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
             border: 1px solid #dee2e6;
+            border-radius: 5px;
+        }
+        div[data-testid="stExpander"] details summary:hover {
+            color: #000000 !important;
         }
         div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
             background-color: #ffffff !important;
         }
-        
+        div[data-testid="stExpander"] table, 
+        div[data-testid="stExpander"] td, 
+        div[data-testid="stExpander"] th {
+            color: #000000 !important;
+            background-color: #ffffff !important;
+            border-bottom: 1px solid #eee !important;
+        }
+        div[data-testid="stDataFrame"] {
+            background-color: #ffffff !important;
+        }
+
         /* Chart Override */
         .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
@@ -451,7 +471,6 @@ def show_ai_autopilot_page():
                 pnl = curr_val - g['invest']
                 sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
                 
-                # Check for regenerated orders
                 if 'orders' not in g or not g['orders']:
                     g_levels = np.linspace(g['lower'], g['upper'], 5)
                     new_orders = []
@@ -469,13 +488,11 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
-                    # CLOSE
                     ap['cash_balance'] += curr_val
                     pnl_pct = (pnl/g['invest'])*100
                     ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
                     ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
                     
-                    # TELEGRAM ALERT
                     inv_inr = g['invest'] * usd_inr
                     val_inr = curr_val * usd_inr
                     pnl_inr = pnl * usd_inr
