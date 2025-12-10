@@ -100,7 +100,9 @@ def apply_custom_style():
 IST = pytz.timezone("Asia/Kolkata")
 START_CAPITAL = 100000.0
 DB_PATH = "paper_trades.db"
-CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
+
+# UPDATED COIN LIST: BTC, ETH, BNB, SOL, ADA
+CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD"]
 
 # ---------------------------
 # DATA FETCHING
@@ -245,7 +247,7 @@ def show_crypto_bot_page():
         # Save selection in state
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
         curr_price = get_current_price(selected_coin)
-        st.metric("Current Price", f"${curr_price:,.2f}")
+        st.metric("Current Price", f"${curr_price:,.4f}")
         st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
         
         if st.button("🧠 Auto-Pick Settings"):
@@ -260,8 +262,8 @@ def show_crypto_bot_page():
 
     with c2:
         col_a, col_b = st.columns(2)
-        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0))
-        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0))
+        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0), format="%.4f")
+        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0), format="%.4f")
         
         col_c, col_d = st.columns(2)
         grids = col_c.number_input("Grids", min_value=2, max_value=20, value=st.session_state.get('auto_grids', 5))
@@ -306,8 +308,8 @@ def show_crypto_bot_page():
 
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,2,2,2,1])
             c1.write(data['coin'].replace("-USD",""))
-            c2.write(f"${data['entry_price']:.2f}")
-            c3.write(f"${cp:.2f}")
+            c2.write(f"${data['entry_price']:.4f}")
+            c3.write(f"${cp:.4f}")
             c4.write(f"${data['invest']:.0f} / ₹{inv_inr:,.0f}")
             pnl_color = "green" if pnl_usd >= 0 else "red"
             c5.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
@@ -329,8 +331,8 @@ def show_crypto_bot_page():
                 levels = np.linspace(lower, upper, grids)
                 orders = []
                 for lvl in levels:
-                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.2f}", "Status": "Open"})
-                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.2f}", "Status": "Open"})
+                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.4f}", "Status": "Open"})
+                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.4f}", "Status": "Open"})
                 st.table(pd.DataFrame(orders))
     else:
         st.caption("Start a bot to see grid levels.")
@@ -508,7 +510,7 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
-                    # CLOSE POSITION
+                    # CLOSE POSITION & CAPTURE IST TIMESTAMP
                     ap['cash_balance'] += curr_val
                     
                     close_time_ist = dt.datetime.now(IST)
@@ -559,10 +561,9 @@ def show_crypto_report_page():
     
     st_autorefresh(interval=30_000, key="report_refresh")
 
-    # --- 1. LIVE RUNNING TRADES SUMMARY (NEW) ---
+    # --- 1. LIVE RUNNING TRADES SUMMARY ---
     st.subheader("🔴 Live Portfolio Overview (Running Trades)")
     
-    # Calculate Live Metrics
     running_invested_usd = sum([g.get('invest', 0.0) for g in ap['active_grids']])
     running_present_val_usd = 0.0
     for g in ap['active_grids']:
@@ -570,7 +571,6 @@ def show_crypto_report_page():
          running_present_val_usd += (g['qty'] * cp)
     running_pnl_usd = running_present_val_usd - running_invested_usd
     
-    # Convert to INR
     r_inv_inr = running_invested_usd * usd_inr
     r_val_inr = running_present_val_usd * usd_inr
     r_pnl_inr = running_pnl_usd * usd_inr
@@ -589,17 +589,14 @@ def show_crypto_report_page():
         st.info("No closed trades available yet.")
         return
 
-    # Convert History to DataFrame
     df = pd.DataFrame(ap["history"])
     df['date'] = pd.to_datetime(df['date'])
     
-    # Metrics
     total_profit = df['pnl'].sum()
     win_count = len(df[df['pnl'] > 0])
     total_count = len(df)
     win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
     
-    # Metric Cards
     m1, m2, m3 = st.columns(3)
     m1.metric("Total Realized PnL (Till Date)", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
     m2.metric("Win Rate", f"{win_rate:.1f}%")
