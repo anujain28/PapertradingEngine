@@ -1,0 +1,16 @@
+streamlit
+pandas
+numpy
+yfinance
+ta
+pytz
+requests
+dhanhq
+NorenRestApiPy
+streamlit-local-storage
+streamlit-autorefresh
+openpyxl
+
+
+
+
