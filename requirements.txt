@@ -13,6 +13,8 @@ openpyxl
 python-telegram-bot
 httpx
 configparser
+nsepython>=0.9.0
+
 
 
 
