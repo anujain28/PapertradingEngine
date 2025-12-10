@@ -101,7 +101,7 @@ IST = pytz.timezone("Asia/Kolkata")
 START_CAPITAL = 100000.0
 DB_PATH = "paper_trades.db"
 
-# UPDATED COIN LIST: BTC, ETH, BNB, SOL, ADA
+# COIN LIST: BTC, ETH, BNB, SOL, ADA
 CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD"]
 
 # ---------------------------
@@ -191,29 +191,10 @@ def init_db():
 init_db()
 
 # ---------------------------
-# PAGE 1: PAPER TRADING (STOCKS)
+# PAGE 1: CRYPTO MANUAL BOT (Renamed)
 # ---------------------------
-def show_paper_trading_page():
-    st.title("📈 AI Stocks Paper Trading")
-    st_autorefresh(interval=120_000, key="auto_refresh")
-    state = st.session_state["state"]
-    col1, col2 = st.columns(2)
-    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
-    col2.metric("Equity", f"₹{state['equity']:,.2f}")
-    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
-
-# ---------------------------
-# PAGE 2: PNL LOG (STOCKS)
-# ---------------------------
-def show_pnl_page():
-    st.title("📊 Stocks PNL Log")
-    st.write("PNL Data will appear here once trades execute.")
-
-# ---------------------------
-# PAGE 3: CRYPTO BOT (GRID TRADING)
-# ---------------------------
-def show_crypto_bot_page():
-    st.title("🤖 AI Grid Trading Bot")
+def show_crypto_manual_bot_page():
+    st.title("🤖 AI Crypto Manual Bot")
     st_autorefresh(interval=30_000, key="grid_refresh") 
     usd_inr = st.session_state["usd_inr"]
 
@@ -241,13 +222,13 @@ def show_crypto_bot_page():
     st.markdown("---")
 
     # Grid Config
-    st.subheader("⚙️ Configure Grid Bot (Manual)")
+    st.subheader("⚙️ Configure Manual Bot")
     c1, c2 = st.columns([1, 2])
     with c1:
         # Save selection in state
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
         curr_price = get_current_price(selected_coin)
-        st.metric("Current Price", f"${curr_price:,.4f}")
+        st.metric("Current Price", f"${curr_price:,.2f}")
         st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
         
         if st.button("🧠 Auto-Pick Settings"):
@@ -262,8 +243,8 @@ def show_crypto_bot_page():
 
     with c2:
         col_a, col_b = st.columns(2)
-        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0), format="%.4f")
-        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0), format="%.4f")
+        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0))
+        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0))
         
         col_c, col_d = st.columns(2)
         grids = col_c.number_input("Grids", min_value=2, max_value=20, value=st.session_state.get('auto_grids', 5))
@@ -273,7 +254,7 @@ def show_crypto_bot_page():
         tp_pct = col_e.number_input("TP (%)", value=st.session_state.get('auto_tp', 2.0))
         sl_pct = col_f.number_input("SL (%)", value=st.session_state.get('auto_sl', 3.0))
 
-    if st.button("▶️ Start Grid Bot"):
+    if st.button("▶️ Start Manual Bot"):
         if curr_price > 0 and lower_p < upper_p:
             bot_id = selected_coin
             entry_qty = invest / curr_price
@@ -287,7 +268,7 @@ def show_crypto_bot_page():
 
     # Active Bots
     st.markdown("---")
-    st.subheader("📍 Active Grid Bots")
+    st.subheader("📍 Active Manual Bots")
     active_bots = st.session_state["grid_bot_active"]
     if active_bots:
         h1, h2, h3, h4, h5, h6, h7 = st.columns([1,1,1,2,2,2,1])
@@ -308,8 +289,8 @@ def show_crypto_bot_page():
 
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,2,2,2,1])
             c1.write(data['coin'].replace("-USD",""))
-            c2.write(f"${data['entry_price']:.4f}")
-            c3.write(f"${cp:.4f}")
+            c2.write(f"${data['entry_price']:.2f}")
+            c3.write(f"${cp:.2f}")
             c4.write(f"${data['invest']:.0f} / ₹{inv_inr:,.0f}")
             pnl_color = "green" if pnl_usd >= 0 else "red"
             c5.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
@@ -318,7 +299,7 @@ def show_crypto_bot_page():
                 del st.session_state["grid_bot_active"][b_id]
                 st.rerun()
     else:
-        st.info("No active grid bots.")
+        st.info("No active manual bots.")
 
     # Live Grid Orders
     st.markdown("### 📋 Live Grid Orders")
@@ -331,8 +312,8 @@ def show_crypto_bot_page():
                 levels = np.linspace(lower, upper, grids)
                 orders = []
                 for lvl in levels:
-                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.4f}", "Status": "Open"})
-                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.4f}", "Status": "Open"})
+                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.2f}", "Status": "Open"})
+                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.2f}", "Status": "Open"})
                 st.table(pd.DataFrame(orders))
     else:
         st.caption("Start a bot to see grid levels.")
@@ -648,10 +629,17 @@ def main():
     page = None
     if market_type == "Stocks":
         st.sidebar.subheader("Stocks Menu")
-        page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
+        if st.sidebar.button("Launch Stocks App"):
+            try:
+                # Placeholder for invoking app1.py
+                st.warning("⚠️ Stocks Module (app1.py) is under construction.")
+            except:
+                pass
+        
     else: # Crypto
         st.sidebar.subheader("Crypto Menu")
-        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Report"])
+        # UPDATED ORDER
+        page = st.sidebar.radio("Go to", ["AI Auto-Pilot", "Crypto Report", "Crypto Manual Bot"])
         
         st.sidebar.markdown("---")
         with st.sidebar.expander("🔌 Binance Keys (Live Trading)"):
@@ -672,16 +660,12 @@ def main():
         st.session_state["crypto_loop_started"] = True
 
     # --- ROUTING ---
-    if page == "Paper Trading":
-        show_paper_trading_page()
-    elif page == "PNL Log":
-        show_pnl_page()
-    elif page == "Crypto Grid Bot":
-        show_crypto_bot_page()
-    elif page == "AI Auto-Pilot":
+    if page == "AI Auto-Pilot":
         show_ai_autopilot_page()
     elif page == "Crypto Report":
         show_crypto_report_page()
+    elif page == "Crypto Manual Bot":
+        show_crypto_manual_bot_page()
 
 if __name__ == "__main__":
     main()
