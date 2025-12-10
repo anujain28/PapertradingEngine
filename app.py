@@ -747,7 +747,7 @@ def main():
     # Start Telegram scheduler once
     start_telegram_scheduler_if_needed()
 
- page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
+     page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
 
     if page == "Paper Trading":
         show_paper_trading_page()
