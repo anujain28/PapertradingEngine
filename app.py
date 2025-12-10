@@ -155,12 +155,14 @@ if "autopilot" not in st.session_state:
     st.session_state["autopilot"] = {
         "running": False, "mode": "PAPER", "currency": "USDT",
         "total_capital": 0.0, "cash_balance": 0.0,
-        "active_grids": [], "logs": []
+        "active_grids": [], "logs": [], "history": []
     }
 else:
-    # Ensure structure is correct
+    # Fix for migration
     if "active_grids" not in st.session_state["autopilot"]:
         st.session_state["autopilot"]["active_grids"] = []
+    if "history" not in st.session_state["autopilot"]:
+        st.session_state["autopilot"]["history"] = []
 
 for key in ["engine_status", "engine_running", "loop_started", 
             "crypto_running", "crypto_status", "crypto_loop_started",
@@ -202,7 +204,7 @@ def show_pnl_page():
     st.write("PNL Data will appear here once trades execute.")
 
 # ---------------------------
-# PAGE 3: CRYPTO BOT (GRID TRADING + CHART)
+# PAGE 3: CRYPTO BOT (GRID TRADING)
 # ---------------------------
 def show_crypto_bot_page():
     st.title("🤖 AI Grid Trading Bot")
@@ -236,7 +238,7 @@ def show_crypto_bot_page():
     st.subheader("⚙️ Configure Grid Bot (Manual)")
     c1, c2 = st.columns([1, 2])
     with c1:
-        # Save selection in state to sync with chart
+        # Save selection in state
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
         curr_price = get_current_price(selected_coin)
         st.metric("Current Price", f"${curr_price:,.2f}")
@@ -331,10 +333,9 @@ def show_crypto_bot_page():
 
     st.markdown("---")
     
-    # --- MOVED CHART SECTION ---
+    # CHART SECTION
     st.subheader(f"📉 Asset Price Chart: {selected_coin}")
     
-    # Toolbar for Timeframe
     t_col1, t_col2 = st.columns([3, 1])
     with t_col1:
         time_range = st.radio("Select Timeframe", 
@@ -349,7 +350,6 @@ def show_crypto_bot_page():
                         open=chart_data['Open'], high=chart_data['High'],
                         low=chart_data['Low'], close=chart_data['Close'])])
         
-        # Professional Black Chart Style
         fig.update_layout(
             height=500, margin=dict(l=0,r=0,t=0,b=0),
             plot_bgcolor='black', paper_bgcolor='black',
@@ -369,7 +369,6 @@ def show_ai_autopilot_page():
     usd_inr = st.session_state["usd_inr"]
     ap = st.session_state["autopilot"]
 
-    # Live Mode Check
     api_key = st.session_state.get("binance_api")
     secret_key = st.session_state.get("binance_secret")
     is_live = bool(api_key and secret_key)
@@ -384,7 +383,6 @@ def show_ai_autopilot_page():
 
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
-    # --- CONFIGURATION SECTION ---
     if not ap["running"]:
         st.subheader("🛠️ Setup Auto-Pilot")
         c1, c2, c3 = st.columns(3)
@@ -405,11 +403,12 @@ def show_ai_autopilot_page():
                 ap["cash_balance"] = capital_input
             
             ap["active_grids"] = []
+            ap["history"] = [] # Reset history on start
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started in {ap['mode']} Mode. Capital: ${ap['total_capital']:.2f}")
             st.rerun()
             
     else:
-        # --- RUNNING DASHBOARD ---
+        # RUNNING DASHBOARD
         st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
@@ -434,7 +433,7 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # 2. AI SCANNER LOGIC
+        # SCANNER LOGIC
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             existing = [g for g in ap['active_grids'] if g['coin'] == scan_coin]
@@ -445,13 +444,11 @@ def show_ai_autopilot_page():
                 
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
-                    if ap["mode"] == "LIVE":
-                         pass
-
                     lower = cp * 0.95
                     upper = cp * 1.05
                     qty = invest_amt / cp
                     
+                    # Generate Orders for Display
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -461,10 +458,9 @@ def show_ai_autopilot_page():
                     new_grid = {
                         "coin": scan_coin, "entry": cp,
                         "lower": lower, "upper": upper, "qty": qty,
-                        "invest": invest_amt, "grids": 5,
-                        "tp": 2.0, "sl": 3.0,
+                        "invest": invest_amt, "grids": 5, "tp": 2.0, "sl": 3.0,
                         "orders": grid_orders,
-                        "start_time": dt.datetime.now().strftime('%H:%M:%S')
+                        "start_time": dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     
                     ap['active_grids'].append(new_grid)
@@ -481,7 +477,7 @@ def show_ai_autopilot_page():
             
         st.markdown("---")
         
-        # 3. LIVE AUTO-PILOT GRIDS
+        # ACTIVE GRIDS TABLE
         st.subheader(f"💼 Active {ap['mode']} Grids")
         
         if ap['active_grids']:
@@ -511,7 +507,19 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
+                    # CLOSE POSITION & SAVE TO HISTORY
                     ap['cash_balance'] += curr_val
+                    
+                    closed_trade = {
+                        "date": dt.datetime.now(),
+                        "coin": g['coin'],
+                        "invested": g['invest'],
+                        "pnl": pnl,
+                        "return_pct": (pnl/g['invest'])*100,
+                        "duration": "Auto"
+                    }
+                    ap['history'].append(closed_trade)
+                    
                     ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 STOPPED: Closed Grid {g['coin']}.")
                     ap['active_grids'].pop(i)
                     st.rerun()
@@ -522,7 +530,7 @@ def show_ai_autopilot_page():
             total_pnl_color = "green" if sum_pnl >= 0 else "red"
             f4.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
             
-            # LIVE ORDERS TABLE IN AUTO-PILOT
+            # LIVE ORDERS
             st.markdown("### 📋 Live Grid Orders")
             for g in ap['active_grids']:
                 with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
@@ -537,6 +545,70 @@ def show_ai_autopilot_page():
         if st.button("⏹ Emergency Stop Engine"):
             ap["running"] = False
             st.rerun()
+
+# ---------------------------
+# PAGE 6: CRYPTO PNL REPORT (NEW)
+# ---------------------------
+def show_crypto_report_page():
+    st.title("📑 Crypto PnL Report (Auto-Pilot)")
+    ap = st.session_state["autopilot"]
+    
+    if not ap["history"]:
+        st.info("No closed trades available yet. Reports will generate once Auto-Pilot grids are closed.")
+        return
+
+    # Convert History to DataFrame
+    df = pd.DataFrame(ap["history"])
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # --- METRICS ---
+    total_profit = df['pnl'].sum()
+    total_invested_vol = df['invested'].sum()
+    avg_roi = df['return_pct'].mean()
+    win_count = len(df[df['pnl'] > 0])
+    total_count = len(df)
+    win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
+    
+    # Projections (Simple linear extrapolation)
+    daily_avg = total_profit / max(1, df['date'].nunique())
+    proj_monthly = daily_avg * 30
+    proj_yearly = daily_avg * 365
+    
+    # METRIC CARDS
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Realized PnL", f"${total_profit:,.2f}")
+    m2.metric("Win Rate", f"{win_rate:.1f}%", f"{win_count}/{total_count}")
+    m3.metric("Avg ROI per Trade", f"{avg_roi:.2f}%")
+    m4.metric("Est. Monthly Return", f"${proj_monthly:,.2f}")
+
+    st.markdown("---")
+    
+    # --- TIME-BASED REPORTS ---
+    c1, c2, c3 = st.tabs(["Daily Report", "Weekly Report", "Monthly Report"])
+    
+    with c1:
+        st.subheader("Daily Profit Log")
+        daily_df = df.groupby(df['date'].dt.date)[['invested', 'pnl']].sum().reset_index()
+        daily_df.columns = ['Date', 'Total Invested', 'Net PnL']
+        st.dataframe(daily_df, use_container_width=True)
+        
+    with c2:
+        st.subheader("Weekly Summary")
+        # ISO Calendar week grouping
+        df['Week'] = df['date'].dt.isocalendar().week
+        weekly_df = df.groupby('Week')[['invested', 'pnl']].sum().reset_index()
+        st.dataframe(weekly_df, use_container_width=True)
+        
+    with c3:
+        st.subheader("Monthly Overview")
+        df['Month'] = df['date'].dt.month_name()
+        monthly_df = df.groupby('Month')[['invested', 'pnl']].sum().reset_index()
+        st.dataframe(monthly_df, use_container_width=True)
+        
+    st.markdown("---")
+    st.subheader("📜 Complete Trade Log")
+    st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+
 
 # ---------------------------
 # MAIN EXECUTION
@@ -555,7 +627,8 @@ def main():
         page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
     else: # Crypto
         st.sidebar.subheader("Crypto Menu")
-        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot"])
+        # Added Crypto Report to Menu
+        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Report"])
         
         st.sidebar.markdown("---")
         with st.sidebar.expander("🔌 Binance Keys (Live Trading)"):
@@ -584,6 +657,8 @@ def main():
         show_crypto_bot_page()
     elif page == "AI Auto-Pilot":
         show_ai_autopilot_page()
+    elif page == "Crypto Report":
+        show_crypto_report_page()
 
 if __name__ == "__main__":
     main()
