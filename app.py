@@ -96,15 +96,34 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* Table / Dataframe Styling Override for Visibility */
-        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+        /* --- EXPANDER & TABLE FIX (The Request) --- */
+        /* Force Expander Header to be Light Grey with Black Text */
+        div[data-testid="stExpander"] details summary {
+            background-color: #f8f9fa !important;
             color: #000000 !important;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+        }
+        div[data-testid="stExpander"] details summary:hover {
+            color: #000000 !important;
+        }
+        /* Force Expander Content (The Table Area) to be White */
+        div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
             background-color: #ffffff !important;
         }
-        div[data-testid="stTable"] {
+        /* Force Table Text to be Black */
+        div[data-testid="stExpander"] table, 
+        div[data-testid="stExpander"] td, 
+        div[data-testid="stExpander"] th {
             color: #000000 !important;
+            background-color: #ffffff !important;
+            border-bottom: 1px solid #eee !important;
         }
-        
+        /* Fix for DataFrame Container */
+        div[data-testid="stDataFrame"] {
+            background-color: #ffffff !important;
+        }
+
         /* Chart Override */
         .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
@@ -326,6 +345,7 @@ def show_ai_autopilot_page():
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
     if not ap["running"]:
+        st.subheader("🛠️ Setup Auto-Pilot")
         c1, c2, c3 = st.columns(3)
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
@@ -342,16 +362,14 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
             ap["active_grids"] = []
-            ap["logs"].append(f"[{dt.datetime.now(IST).strftime('%H:%M:%S')}] Engine Started.")
+            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
             st.rerun()
     else:
-        # STATUS BANNER with TIMESTAMP
-        now_ist = dt.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')
-        st.success(f"✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids... (Updated: {now_ist})")
+        st.success(f"✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids... (Updated: {dt.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')})")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
-        # SAFE ACCESS
+        
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         
         grid_current_val = 0.0
@@ -370,16 +388,14 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # SCANNER LOGIC
+        # SCANNER
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             if not any(g['coin'] == scan_coin for g in ap['active_grids']):
                 cp = get_current_price(scan_coin)
-                # Chance logic
                 chance = random.randint(1, 10)
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
-                    # Grid Params
                     lower = cp * 0.95
                     upper = cp * 1.05
                     grid_levels = np.linspace(lower, upper, 5)
@@ -393,13 +409,13 @@ def show_ai_autopilot_page():
                         "lower": lower, "upper": upper,
                         "qty": invest_amt/cp, "invest": invest_amt, 
                         "grids": 5, "tp": 2.0, "sl": 3.0,
-                        "orders": grid_orders # SAVE ORDERS
+                        "orders": grid_orders
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Deployed Grid: {scan_coin}")
                 elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral.")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
 
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]:
@@ -407,15 +423,12 @@ def show_ai_autopilot_page():
 
         st.markdown("---")
 
-        # ACTIVE GRIDS TABLE
         st.subheader(f"💼 Active Grids")
         if ap['active_grids']:
-            # Headers
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
             c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
             c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
             
-            # Totals
             sum_inv = 0.0
             sum_val = 0.0
             sum_pnl = 0.0
@@ -425,12 +438,11 @@ def show_ai_autopilot_page():
                 curr_val = g['qty'] * cp
                 pnl = curr_val - g['invest']
                 
-                # Accumulate
                 sum_inv += g['invest']
                 sum_val += curr_val
                 sum_pnl += pnl
                 
-                # REGENERATE ORDERS IF MISSING (SAFETY FIX)
+                # SAFETY CHECK FOR MISSING ORDERS
                 if 'orders' not in g or not g['orders']:
                     g_levels = np.linspace(g['lower'], g['upper'], 5)
                     new_orders = []
@@ -441,7 +453,7 @@ def show_ai_autopilot_page():
 
                 c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
                 c1.write(g['coin'].replace("-USD",""))
-                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}") # 4 DECIMAL FIX
+                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}")
                 c3.write(f"{g.get('grids',5)} Grids | TP {g.get('tp',2.0)}%")
                 c4.write(f"${g['invest']:.2f}")
                 c5.write(f"${curr_val:.2f}")
@@ -454,7 +466,6 @@ def show_ai_autopilot_page():
                     ap['active_grids'].pop(i)
                     st.rerun()
             
-            # Totals Row
             st.markdown("<div style='border-top:1px solid #ddd; padding-top:10px; margin-top:5px;'></div>", unsafe_allow_html=True)
             f1, f2, f3, f4, f5, f6, f7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
             f1.write("**TOTALS**")
@@ -464,15 +475,13 @@ def show_ai_autopilot_page():
             f6.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
 
             st.markdown("---")
-            # LIVE ORDERS TABLE
             st.markdown("### 📋 Live Grid Orders")
             for g in ap['active_grids']:
                 with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
                     if 'orders' in g and g['orders']:
                         ord_df = pd.DataFrame(g['orders'])
-                        # Format for display
                         ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
-                        st.table(ord_df) # Use st.table for better visibility of simple data
+                        st.table(ord_df)
                     else:
                         st.write("Generating orders...")
         else:
@@ -490,8 +499,6 @@ def show_crypto_report_page():
     ap = st.session_state["autopilot"]
     usd_inr = st.session_state["usd_inr"]
     
-    st_autorefresh(interval=30_000, key="report_refresh")
-
     st.subheader("🔴 Live Portfolio")
     running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
     running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
@@ -510,10 +517,7 @@ def show_crypto_report_page():
         m1, m2 = st.columns(2)
         m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
         m2.metric("Trades", len(df))
-        
-        display_df = df.copy()
-        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
-        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
+        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
     else:
         st.info("No closed trades.")
 
@@ -526,7 +530,6 @@ def main():
     
     st.sidebar.title("Navigation")
     
-    # Updated Navigation: Stocks Top, Crypto Bottom
     st.sidebar.subheader("📈 Stocks Menu")
     page_stocks = st.sidebar.radio("Stocks Actions", ["Paper Trading", "PNL Log", "Auto-Pilot App"], label_visibility="collapsed")
     
@@ -543,45 +546,11 @@ def main():
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
 
-    # LOGIC TO DECIDE PAGE
-    # We prioritize the radio that was clicked last. 
-    # Since we can't easily detect that, we use a simple toggle:
-    # If user interacts with Crypto menu, we show Crypto.
-    # To fix the "no selection" issue, we just need to ensure the active section matches.
-    # The simplest way without complex state is to check which radio matches the current view state or just render both menus.
-    
-    # Hack: We use session state to track 'active_tab'.
-    if "active_tab" not in st.session_state:
-        st.session_state["active_tab"] = "AI Auto-Pilot" # Default
-
-    # Update state based on radios? No, radios return value immediately.
-    # We will assume: if the Stocks radio value changes, we switch to stocks. 
-    # BUT Streamlit re-runs script. 
-    # Let's just use the "Select Market" approach again, it was robust.
-    # User said "do not make a selection", meaning show BOTH menus.
-    # So we need to know WHICH item was clicked.
-    
-    # We can try to infer. But simpler:
-    # We check if `page_stocks` changed from last run?
-    # Let's just assume if the user is on a Stocks page, we show stocks content.
-    
-    # Let's rely on a combined list if possible? No.
-    # We will use the previous logic but keep the visual separation requested.
-    
-    # REVERTING to separate display logic to ensure robustness:
-    # We will use a "Mode" toggle at the very top (invisible or minimal) OR
-    # just check if the returned value belongs to Stocks or Crypto.
-    
-    # Since the names are unique:
-    all_crypto_pages = ["AI Auto-Pilot", "Crypto Report", "Manual Bot"]
-    all_stock_pages = ["Paper Trading", "PNL Log", "Auto-Pilot App"]
-    
-    # We need a way to switch. The best way with two radios is to check which one changed.
-    # We will store the 'last' value of each radio.
     if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
     if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
+    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
     
-    current_page = "AI Auto-Pilot" # Default
+    current_page = "AI Auto-Pilot" 
     
     if page_stocks != st.session_state["last_stock_page"]:
         current_page = page_stocks
@@ -592,13 +561,11 @@ def main():
         st.session_state["active_section"] = "crypto"
         st.session_state["last_crypto_page"] = page_crypto
     else:
-        # No change, use active section's value
         if st.session_state.get("active_section") == "stocks":
             current_page = page_stocks
         else:
             current_page = page_crypto
 
-    # --- THREADS ---
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
@@ -606,7 +573,6 @@ def main():
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
-    # --- ROUTING ---
     if current_page == "AI Auto-Pilot":
         show_ai_autopilot_page()
     elif current_page == "Crypto Report":
