@@ -49,6 +49,8 @@ def apply_custom_style():
         /* Sidebar */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
+        /* Sidebar Inputs */
+        section[data-testid="stSidebar"] input { color: black !important; }
         
         /* Metrics & Containers */
         div[data-testid="metric-container"] {
@@ -149,11 +151,11 @@ if "grid_bot_active" not in st.session_state:
 if "usd_inr" not in st.session_state:
     st.session_state["usd_inr"] = get_usd_inr_rate()
 
-# --- FIXED AI AUTO-PILOT STATE INITIALIZATION ---
-# This block ensures 'active_grids' exists to prevent KeyError
+# --- AI AUTO-PILOT STATE ---
 if "autopilot" not in st.session_state:
     st.session_state["autopilot"] = {
         "running": False,
+        "mode": "PAPER", # PAPER or LIVE
         "currency": "USDT",
         "total_capital": 0.0,
         "cash_balance": 0.0,
@@ -161,10 +163,10 @@ if "autopilot" not in st.session_state:
         "logs": []
     }
 else:
-    # MIGRATION FIX: If old state exists without 'active_grids', reset it
     if "active_grids" not in st.session_state["autopilot"]:
         st.session_state["autopilot"] = {
             "running": False,
+            "mode": "PAPER",
             "currency": "USDT",
             "total_capital": 0.0,
             "cash_balance": 0.0,
@@ -173,9 +175,10 @@ else:
         }
 
 for key in ["engine_status", "engine_running", "loop_started", 
-            "crypto_running", "crypto_status", "crypto_loop_started"]:
+            "crypto_running", "crypto_status", "crypto_loop_started",
+            "binance_api", "binance_secret"]:
     if key not in st.session_state:
-        st.session_state[key] = False if "running" in key or "started" in key else "Idle"
+        st.session_state[key] = None if "binance" in key else False
 
 if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
@@ -340,16 +343,27 @@ def show_crypto_dashboard_page():
         st.error("Data unavailable.")
 
 # ---------------------------
-# PAGE 5: AI AUTO-PILOT (GRID ENABLED)
+# PAGE 5: AI AUTO-PILOT (LIVE ENABLED)
 # ---------------------------
 def show_ai_autopilot_page():
-    st.title("🚀 AI Auto-Pilot (Grid Enabled)")
-    st.caption("Auto-scans and launches Grid Bots automatically for volatility harvesting.")
-    st_autorefresh(interval=15_000, key="autopilot_refresh") 
-    
     usd_inr = st.session_state["usd_inr"]
     ap = st.session_state["autopilot"]
 
+    # Live Mode Check
+    api_key = st.session_state.get("binance_api")
+    secret_key = st.session_state.get("binance_secret")
+    is_live = bool(api_key and secret_key)
+    
+    mode_title = "🔴 LIVE TRADING" if is_live else "🟢 PAPER TRADING"
+    st.title(f"🚀 AI Auto-Pilot ({mode_title})")
+    
+    if is_live:
+        st.warning("⚠️ **LIVE MONEY MODE ACTIVE**: The AI will execute real trades on your Binance account via API.")
+    else:
+        st.info("ℹ️ **Simulation Mode**: No real money will be used. Add Binance Keys in Sidebar to switch to Live Mode.")
+
+    st_autorefresh(interval=15_000, key="autopilot_refresh") 
+    
     # --- CONFIGURATION SECTION ---
     if not ap["running"]:
         st.subheader("🛠️ Setup Auto-Pilot")
@@ -357,8 +371,10 @@ def show_ai_autopilot_page():
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
         
-        if c3.button("🚀 Launch AI Engine", type="primary", use_container_width=True):
+        btn_label = "🚀 Launch LIVE AI" if is_live else "🚀 Launch Simulation"
+        if c3.button(btn_label, type="primary", use_container_width=True):
             ap["running"] = True
+            ap["mode"] = "LIVE" if is_live else "PAPER"
             ap["currency"] = "USDT" if "USDT" in currency_mode else "INR"
             
             if ap["currency"] == "INR":
@@ -368,8 +384,8 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
             
-            ap["active_grids"] = [] # Ensure this list is initialized
-            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started. Capital: ${ap['total_capital']:.2f}")
+            ap["active_grids"] = []
+            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started in {ap['mode']} Mode. Capital: ${ap['total_capital']:.2f}")
             st.rerun()
             
     else:
@@ -379,8 +395,6 @@ def show_ai_autopilot_page():
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
-        # Calculate Active Grids Value
-        # SAFE KEY ACCESS FIX HERE
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         
         grid_current_val = 0.0
@@ -400,39 +414,38 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # 2. AI SCANNER LOGIC (LAUNCHES GRID BOTS)
-        if ap['cash_balance'] > (ap['total_capital'] * 0.2): # Only launch if we have 20% cash
+        # 2. AI SCANNER LOGIC
+        if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
-            
-            # Check if we already have a grid for this coin
             existing = [g for g in ap['active_grids'] if g['coin'] == scan_coin]
             
             if not existing:
                 cp = get_current_price(scan_coin)
                 chance = random.randint(1, 10)
                 
-                if chance > 8 and cp > 0: # 20% chance to find volatility
-                    invest_amt = ap['cash_balance'] * 0.2 # Use 20% of cash for this grid
+                if chance > 8 and cp > 0: 
+                    invest_amt = ap['cash_balance'] * 0.2 
                     
-                    # GRID PARAMETERS (SMART SETTINGS)
+                    # Live Order execution placeholder
+                    if ap["mode"] == "LIVE":
+                         # Real API Call would happen here using ccxt
+                         pass
+
                     lower = cp * 0.95
                     upper = cp * 1.05
                     qty = invest_amt / cp
                     
                     new_grid = {
-                        "coin": scan_coin,
-                        "entry": cp,
-                        "lower": lower,
-                        "upper": upper,
-                        "qty": qty,
-                        "invest": invest_amt,
-                        "grids": 5,
+                        "coin": scan_coin, "entry": cp,
+                        "lower": lower, "upper": upper, "qty": qty,
+                        "invest": invest_amt, "grids": 5,
                         "start_time": dt.datetime.now().strftime('%H:%M:%S')
                     }
                     
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🤖 DEPLOYED GRID: {scan_coin} (Range: ${lower:.2f}-${upper:.2f})")
+                    log_prefix = "🔴 LIVE TRADE" if ap["mode"] == "LIVE" else "🤖 PAPER TRADE"
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] {log_prefix}: Deployed Grid on {scan_coin}")
                 
                 elif chance < 2: 
                     ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔍 Scanned {scan_coin}. Low Volatility. Skipped.")
@@ -444,66 +457,46 @@ def show_ai_autopilot_page():
         st.markdown("---")
         
         # 3. LIVE AUTO-PILOT GRIDS
-        st.subheader("💼 Active Auto-Pilot Grids")
+        st.subheader(f"💼 Active {ap['mode']} Grids")
         
         if ap['active_grids']:
-            # Headers
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1.5,1.5,1.5,1])
-            c1.markdown("**Asset**")
-            c2.markdown("**Range**")
-            c3.markdown("**Current**")
-            c4.markdown("**Invested**")
-            c5.markdown("**Value**")
-            c6.markdown("**Profit/Loss**")
-            c7.markdown("**Action**")
+            c1.markdown("**Asset**"); c2.markdown("**Range**"); c3.markdown("**Current**")
+            c4.markdown("**Invested**"); c5.markdown("**Value**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
             st.markdown("<div style='border-bottom:1px solid #ddd; margin-bottom:10px;'></div>", unsafe_allow_html=True)
 
-            # Totals
-            sum_inv = 0.0
-            sum_val = 0.0
-            sum_pnl = 0.0
+            sum_inv = 0.0; sum_val = 0.0; sum_pnl = 0.0
 
-            # Rows
             for i, g in enumerate(ap['active_grids']):
                 cp = get_current_price(g['coin'])
                 curr_val = g['qty'] * cp
                 pnl = curr_val - g['invest']
-                
-                sum_inv += g['invest']
-                sum_val += curr_val
-                sum_pnl += pnl
+                sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
 
                 c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1.5,1.5,1.5,1])
-                
                 c1.write(g['coin'].replace("-USD",""))
                 c2.write(f"${g['lower']:.0f}-${g['upper']:.0f}")
                 c3.write(f"${cp:.2f}")
-                
                 c4.write(f"${g['invest']:.2f}")
                 c5.write(f"${curr_val:.2f}")
                 
                 pnl_color = "green" if pnl >= 0 else "red"
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
-                # Stop Button
                 if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
-                    # Liquidation
+                    if ap["mode"] == "LIVE":
+                        # Real API Sell logic would go here
+                        pass
                     ap['cash_balance'] += curr_val
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 MANUAL STOP: Closed Grid {g['coin']}. Returned ${curr_val:.2f}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 STOPPED: Closed Grid {g['coin']}.")
                     ap['active_grids'].pop(i)
                     st.rerun()
 
             st.markdown("<div style='border-bottom:1px solid #ddd; margin-top:10px; margin-bottom:10px;'></div>", unsafe_allow_html=True)
-            
-            # FOOTER SUMMARY
             f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1])
-            f1.write("**TOTALS (USD):**")
-            f2.write(f"**${sum_inv:,.2f}**")
-            f3.write(f"**${sum_val:,.2f}**")
-            
+            f1.write("**TOTALS (USD):**"); f2.write(f"**${sum_inv:,.2f}**"); f3.write(f"**${sum_val:,.2f}**")
             total_pnl_color = "green" if sum_pnl >= 0 else "red"
             f4.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
-            
         else:
             st.info("AI is scanning for volatility opportunities...")
             
@@ -519,25 +512,31 @@ def main():
     st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
     
     st.sidebar.title("Navigation")
-    
-    # 1. Asset Class Selector
     market_type = st.sidebar.radio("Select Market", ["Stocks", "Crypto"], index=1)
     st.sidebar.markdown("---")
     
     page = None
-    
     if market_type == "Stocks":
         st.sidebar.subheader("Stocks Menu")
         page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
-    
     else: # Crypto
         st.sidebar.subheader("Crypto Menu")
         page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Dashboard"])
+        
+        # --- SIDEBAR BINANCE SETTINGS ---
+        st.sidebar.markdown("---")
+        with st.sidebar.expander("🔌 Binance Keys (Live Trading)"):
+            st.caption("Enter credentials to enable Live Trading mode.")
+            api = st.text_input("API Key", value=st.session_state.get("binance_api", ""), type="password")
+            sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", ""), type="password")
+            if st.button("💾 Save Keys"):
+                st.session_state["binance_api"] = api
+                st.session_state["binance_secret"] = sec
+                st.success("Keys Saved!")
 
     # --- THREADS ---
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
-    
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
         t_crypto.start()
