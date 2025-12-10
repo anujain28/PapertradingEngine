@@ -10,7 +10,9 @@ NorenRestApiPy
 streamlit-local-storage
 streamlit-autorefresh
 openpyxl
-Application
+python-telegram-bot
+httpx
+
 
 
 
