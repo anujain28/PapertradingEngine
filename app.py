@@ -53,22 +53,53 @@ def apply_custom_style():
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
         p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* Sidebar */
+        /* Sidebar Container */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         
-        /* --- SIDEBAR INPUTS FIX (Visibility) --- */
-        /* Forces input boxes to be black but TEXT to be white so it is visible */
+        /* --- SIDEBAR INPUTS (High Contrast) --- */
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
-            caret-color: #ffffff !important; /* White cursor */
-            border: 1px solid #555 !important;
+            caret-color: #ffffff !important;
+            border: 1px solid #666 !important;
         }
-        section[data-testid="stSidebar"] div[data-baseweb="input"] {
-            background-color: #000000 !important;
+        section[data-testid="stSidebar"] label {
+            color: #ffffff !important;
         }
         
+        /* --- SIDEBAR EXPANDER FIX (Black BG, White Text) --- */
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
+            background-color: #333 !important; /* Dark Grey Header */
+            color: #ffffff !important;
+            border: 1px solid #555;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] div[role="group"] {
+            background-color: #262730 !important; /* Match Sidebar BG */
+            color: #ffffff !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] p,
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] span {
+            color: #ffffff !important;
+        }
+
+        /* --- MAIN PAGE EXPANDER (White BG, Black Text for Grid Orders) --- */
+        /* Only targets expanders NOT in the sidebar */
+        .main div[data-testid="stExpander"] details summary {
+            background-color: #f8f9fa !important;
+            color: #000000 !important;
+            border: 1px solid #dee2e6;
+        }
+        .main div[data-testid="stExpander"] div[role="group"] {
+            background-color: #ffffff !important;
+        }
+        .main div[data-testid="stExpander"] table, 
+        .main div[data-testid="stExpander"] td, 
+        .main div[data-testid="stExpander"] th,
+        .main div[data-testid="stExpander"] div {
+            color: #000000 !important;
+        }
+
         /* Metrics & Containers */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important;
@@ -107,31 +138,7 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* --- EXPANDER & TABLE VISIBILITY FIX --- */
-        /* 1. The Header Bar */
-        div[data-testid="stExpander"] details summary {
-            background-color: #f8f9fa !important;
-            color: #000000 !important;
-            border: 1px solid #dee2e6;
-        }
-        
-        /* 2. The Content Box (Grid Orders Table) */
-        div[data-testid="stExpander"] div[role="group"] {
-            background-color: #ffffff !important;
-        }
-        
-        /* 3. The Table Text inside Expander */
-        div[data-testid="stExpander"] table, 
-        div[data-testid="stExpander"] tbody, 
-        div[data-testid="stExpander"] tr, 
-        div[data-testid="stExpander"] td,
-        div[data-testid="stExpander"] th {
-            color: #000000 !important;
-            background-color: #ffffff !important;
-            border-bottom: 1px solid #eee !important;
-        }
-        
-        /* 4. Force Dataframe to be White/Black */
+        /* Dataframes */
         div[data-testid="stDataFrame"] {
             background-color: #ffffff !important;
         }
@@ -232,7 +239,7 @@ else:
 keys_to_init = ["engine_status", "engine_running", "loop_started", 
                 "crypto_running", "crypto_status", "crypto_loop_started",
                 "binance_api", "binance_secret", "tg_token", "tg_chat_id",
-                "dhan_client_id", "dhan_token"] # Added Dhan keys
+                "dhan_client_id", "dhan_token"]
 
 for key in keys_to_init:
     if key not in st.session_state:
@@ -242,7 +249,37 @@ if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
 
 # ---------------------------
-# PAGE: CRYPTO MANUAL BOT
+# DATABASE
+# ---------------------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, side TEXT, qty INTEGER, price REAL, timestamp TEXT, pnl REAL)""")
+    conn.commit()
+    conn.close()
+init_db()
+
+# ---------------------------
+# PAGE 1: PAPER TRADING (STOCKS)
+# ---------------------------
+def show_paper_trading_page():
+    st.title("📈 AI Stocks Paper Trading")
+    st_autorefresh(interval=120_000, key="auto_refresh")
+    state = st.session_state["state"]
+    col1, col2 = st.columns(2)
+    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
+    col2.metric("Equity", f"₹{state['equity']:,.2f}")
+    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
+
+# ---------------------------
+# PAGE 2: PNL LOG (STOCKS)
+# ---------------------------
+def show_pnl_page():
+    st.title("📊 Stocks PNL Log")
+    st.write("PNL Data will appear here once trades execute.")
+
+# ---------------------------
+# PAGE 3: CRYPTO BOT (GRID TRADING)
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -436,10 +473,9 @@ def show_ai_autopilot_page():
                 chance = random.randint(1, 10)
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
+                    # Grid Params
                     lower = cp * 0.95
                     upper = cp * 1.05
-                    qty = invest_amt / cp
-                    
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -479,6 +515,7 @@ def show_ai_autopilot_page():
                 pnl = curr_val - g['invest']
                 sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
                 
+                # Check for regenerated orders
                 if 'orders' not in g or not g['orders']:
                     g_levels = np.linspace(g['lower'], g['upper'], 5)
                     new_orders = []
@@ -610,7 +647,7 @@ def main():
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
 
-    # 3. Dhan Config (New)
+    # 3. Dhan Config
     with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
         d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
         d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
