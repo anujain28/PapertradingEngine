@@ -522,7 +522,11 @@ def start_telegram_scheduler_if_needed():
 # STREAMLIT UI
 # ---------------------------
 def show_paper_trading_page():
-    st.title("📈 AI Paper Trading Engine")
+    # Title in white font
+    st.markdown(
+        '<h1 style="color:white;">📈 AI Paper Trading Engine</h1>',
+        unsafe_allow_html=True,
+    )
 
     # Auto-refresh every 2 minutes
     st_autorefresh(interval=120_000, key="auto_refresh")
