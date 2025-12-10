@@ -13,75 +13,78 @@ def apply_custom_style():
     st.markdown("""
         <style>
         /* =========================================
-           1. GLOBAL MAIN PAGE (Pure White Theme)
+           1. GLOBAL THEME (White Background, Black Text)
            ========================================= */
         .stApp {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
-        .main p, .main h1, .main h2, .main h3, .main label, .main span, .main div {
+        
+        /* Force all standard text to black */
+        p, h1, h2, h3, h4, h5, h6, li, span, label, div {
             color: #000000 !important;
         }
 
         /* =========================================
-           2. SIDEBAR (Dark Theme)
+           2. SIDEBAR (Dark Theme - Black BG, White Text)
            ========================================= */
         section[data-testid="stSidebar"] {
             background-color: #262730 !important;
-            color: #ffffff !important;
         }
+        
+        /* Force ALL text in sidebar to be White */
         section[data-testid="stSidebar"] * {
             color: #ffffff !important;
         }
-        
-        /* SIDEBAR INPUTS: Black Box, White Text, White Cursor */
-        section[data-testid="stSidebar"] input { 
-            background-color: #000000 !important; 
-            color: #ffffff !important; 
-            caret-color: #ffffff !important;
-            border: 1px solid #666 !important;
-        }
-        section[data-testid="stSidebar"] label {
+
+        /* --- FIX: SIDEBAR INPUTS (Black Box, White Text) --- */
+        /* This targets the specific input container in the sidebar */
+        section[data-testid="stSidebar"] input.st-be {
+            background-color: #000000 !important;
             color: #ffffff !important;
+            caret-color: #ffffff !important; /* White Cursor */
+            border: 1px solid #555 !important;
         }
-        
-        /* SIDEBAR EXPANDERS: Dark Background, White Text */
+        /* Fallback for other input types */
+        section[data-testid="stSidebar"] div[data-baseweb="input"] {
+            background-color: #000000 !important;
+            border-color: #555 !important;
+        }
+        section[data-testid="stSidebar"] input {
+            color: #ffffff !important; 
+            background-color: transparent !important;
+        }
+
+        /* SIDEBAR EXPANDERS */
         section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
             background-color: #333333 !important;
             color: #ffffff !important;
             border: 1px solid #555;
         }
-        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover {
-            color: #ffbd45 !important; /* Gold hover effect */
-        }
         section[data-testid="stSidebar"] div[data-testid="stExpander"] div[role="group"] {
             background-color: #262730 !important;
-            color: #ffffff !important;
         }
 
         /* =========================================
-           3. MAIN PAGE ELEMENTS (Force White/Black)
+           3. MAIN PAGE COMPONENTS
            ========================================= */
         
-        /* METRIC BOXES */
+        /* METRIC BOXES (Light Grey) */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important;
             border: 1px solid #d1d5db;
-            color: #000000 !important;
             border-radius: 8px;
             padding: 10px;
+            color: #000000 !important;
         }
         div[data-testid="metric-container"] label { color: #000000 !important; }
 
-        /* TABLES & DATAFRAMES */
-        div[data-testid="stDataFrame"], 
-        div[data-testid="stTable"], 
-        div[class*="stDataFrame"] {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
-        
-        /* EXPANDERS (Main Page Only - e.g. Live Grid Orders) */
+        /* TABLES & DATAFRAMES (White BG, Black Text) */
+        div[data-testid="stDataFrame"] { background-color: #ffffff !important; }
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] { color: #000000 !important; }
+        div[data-testid="stTable"] { color: #000000 !important; }
+
+        /* MAIN PAGE EXPANDERS (White BG, Black Text) */
         .main div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
@@ -89,19 +92,18 @@ def apply_custom_style():
         }
         .main div[data-testid="stExpander"] div[role="group"] {
             background-color: #ffffff !important;
-            color: #000000 !important;
         }
         
-        /* DROPDOWNS */
-        div[data-baseweb="select"] > div {
+        /* DROPDOWNS & SELECTBOXES (Main Page) */
+        .main div[data-baseweb="select"] > div {
             background-color: #ffffff !important;
             color: #000000 !important;
             border: 1px solid #ccc;
         }
-        div[data-baseweb="popover"], div[data-baseweb="menu"] {
+        .main div[data-baseweb="popover"], div[data-baseweb="menu"] {
             background-color: #ffffff !important;
         }
-        div[role="option"] {
+        .main div[role="option"] {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
@@ -115,13 +117,13 @@ def apply_custom_style():
         </style>
         """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONFIGURATION UI ---
+# --- SIDEBAR CONFIG UI ---
 def show_sidebar_config():
-    """Renders the configuration expanders in the sidebar."""
     st.sidebar.markdown("---")
     
     # 1. Telegram
     with st.sidebar.expander("📢 Telegram Alerts"):
+        st.caption("Enter Bot Token & Chat ID")
         tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
         tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
         if st.button("💾 Save Telegram"):
@@ -131,8 +133,9 @@ def show_sidebar_config():
 
     # 2. Binance
     with st.sidebar.expander("🔌 Binance Keys"):
-        api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
-        sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
+        st.caption("For Live Crypto Trading")
+        api = st.text_input("API Key", value=st.session_state.get("binance_api", ""), type="password")
+        sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", ""), type="password")
         if st.button("💾 Save Binance"):
             st.session_state["binance_api"] = api
             st.session_state["binance_secret"] = sec
@@ -140,6 +143,7 @@ def show_sidebar_config():
 
     # 3. Dhan
     with st.sidebar.expander("🇮🇳 Dhan Config"):
+        st.caption("For Live Stock Trading")
         d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
         d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
         if st.button("💾 Save Dhan"):
@@ -147,7 +151,7 @@ def show_sidebar_config():
             st.session_state["dhan_token"] = d_token
             st.success("Saved!")
 
-# --- TELEGRAM HELPER ---
+# --- HELPERS ---
 def send_telegram_alert(message):
     token = st.session_state.get("tg_token")
     chat_id = st.session_state.get("tg_chat_id")
@@ -155,19 +159,13 @@ def send_telegram_alert(message):
         try:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
             requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"})
-        except Exception as e:
-            print(f"Telegram Error: {e}")
+        except: pass
 
-# --- DATA HELPERS ---
 @st.cache_data(ttl=3600)
 def get_usd_inr_rate():
     try:
-        data = yf.Ticker("INR=X").history(period="1d")
-        if not data.empty:
-            return data["Close"].iloc[-1]
-    except:
-        pass
-    return 84.0 
+        return yf.Ticker("INR=X").history(period="1d")["Close"].iloc[-1]
+    except: return 84.0 
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
