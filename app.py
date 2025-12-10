@@ -53,24 +53,20 @@ def apply_custom_style():
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
         p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* Sidebar Container */
+        /* Sidebar */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         
-        /* --- SIDEBAR INPUTS (Binance/Telegram Config) --- */
-        /* Input Box Background Black, Text White */
+        /* --- SIDEBAR INPUTS FIX (Visibility) --- */
+        /* Forces input boxes to be black but TEXT to be white so it is visible */
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
+            caret-color: #ffffff !important; /* White cursor */
             border: 1px solid #555 !important;
         }
-        /* Focus State */
-        section[data-testid="stSidebar"] input:focus {
-            border-color: #1f77b4 !important;
-        }
-        /* Labels inside sidebar */
-        section[data-testid="stSidebar"] label {
-            color: #ffffff !important;
+        section[data-testid="stSidebar"] div[data-baseweb="input"] {
+            background-color: #000000 !important;
         }
         
         /* Metrics & Containers */
@@ -111,28 +107,36 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* --- EXPANDER & TABLE FIX --- */
+        /* --- EXPANDER & TABLE VISIBILITY FIX --- */
+        /* 1. The Header Bar */
         div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
             border: 1px solid #dee2e6;
-            border-radius: 5px;
         }
-        div[data-testid="stExpander"] details summary:hover {
-            color: #000000 !important;
-        }
-        div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
+        
+        /* 2. The Content Box (Grid Orders Table) */
+        div[data-testid="stExpander"] div[role="group"] {
             background-color: #ffffff !important;
         }
+        
+        /* 3. The Table Text inside Expander */
         div[data-testid="stExpander"] table, 
-        div[data-testid="stExpander"] td, 
+        div[data-testid="stExpander"] tbody, 
+        div[data-testid="stExpander"] tr, 
+        div[data-testid="stExpander"] td,
         div[data-testid="stExpander"] th {
             color: #000000 !important;
             background-color: #ffffff !important;
             border-bottom: 1px solid #eee !important;
         }
+        
+        /* 4. Force Dataframe to be White/Black */
         div[data-testid="stDataFrame"] {
             background-color: #ffffff !important;
+        }
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+            color: #000000 !important;
         }
 
         /* Chart Override */
@@ -225,11 +229,14 @@ else:
         if k not in st.session_state["autopilot"]:
             st.session_state["autopilot"][k] = v
 
-for key in ["engine_status", "engine_running", "loop_started", 
-            "crypto_running", "crypto_status", "crypto_loop_started",
-            "binance_api", "binance_secret", "tg_token", "tg_chat_id"]:
+keys_to_init = ["engine_status", "engine_running", "loop_started", 
+                "crypto_running", "crypto_status", "crypto_loop_started",
+                "binance_api", "binance_secret", "tg_token", "tg_chat_id",
+                "dhan_client_id", "dhan_token"] # Added Dhan keys
+
+for key in keys_to_init:
     if key not in st.session_state:
-        st.session_state[key] = "" if "tg" in key else (None if "binance" in key else False)
+        st.session_state[key] = "" if "tg" in key or "dhan" in key else (None if "binance" in key else False)
 
 if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
@@ -429,9 +436,10 @@ def show_ai_autopilot_page():
                 chance = random.randint(1, 10)
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
-                    # Grid Params
                     lower = cp * 0.95
                     upper = cp * 1.05
+                    qty = invest_amt / cp
+                    
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -447,9 +455,9 @@ def show_ai_autopilot_page():
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Deployed Grid: {scan_coin}")
                 elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral.")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
 
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]:
@@ -584,6 +592,7 @@ def main():
     
     st.sidebar.markdown("---")
     
+    # 1. Telegram Config
     with st.sidebar.expander("📢 Telegram Alerts"):
         tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
         tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
@@ -592,12 +601,22 @@ def main():
             st.session_state["tg_chat_id"] = tg_chat
             st.success("Saved!")
 
+    # 2. Binance Config
     with st.sidebar.expander("🔌 Binance Keys"):
         api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
         sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
         if st.button("💾 Save Binance Keys"):
             st.session_state["binance_api"] = api
             st.session_state["binance_secret"] = sec
+            st.success("Saved!")
+
+    # 3. Dhan Config (New)
+    with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
+        d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
+        d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
+        if st.button("💾 Save Dhan Config"):
+            st.session_state["dhan_client_id"] = d_id
+            st.session_state["dhan_token"] = d_token
             st.success("Saved!")
 
     if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
