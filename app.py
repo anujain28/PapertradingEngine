@@ -92,7 +92,9 @@ def apply_custom_style():
 IST = pytz.timezone("Asia/Kolkata")
 START_CAPITAL = 100000.0
 DB_PATH = "paper_trades.db"
-CRYPTO_SYMBOLS_USDT = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
+
+# CHANGED: Tickers to INR
+CRYPTO_SYMBOLS_INR = ["BTC-INR", "ETH-INR", "SOL-INR", "ADA-INR", "XRP-INR"]
 
 # ---------------------------
 # ROBUST DATA FETCHING
@@ -171,13 +173,13 @@ def show_pnl_page():
 # PAGE 3: CRYPTO BOT (GRID TRADING)
 # ---------------------------
 def show_crypto_bot_page():
-    st.title("🤖 AI Grid Trading Bot")
+    st.title("🤖 AI Grid Trading Bot (INR)")
     st_autorefresh(interval=30_000, key="grid_refresh") 
 
     # --- A. TOP TABLE (Analysis) ---
-    st.subheader("🔎 Live Market Analysis (30s Update)")
+    st.subheader("🔎 Live Market Analysis (INR)")
     analysis_data = []
-    for coin in CRYPTO_SYMBOLS_USDT:
+    for coin in CRYPTO_SYMBOLS_INR:
         hist = get_safe_crypto_data(coin, period="5d")
         if hist is not None:
             curr = hist['Close'].iloc[-1]
@@ -188,8 +190,8 @@ def show_crypto_bot_page():
             elif change < -3.0: rec = "BUY (Oversold)"
             volatility = (hist['High'] - hist['Low']).mean() / curr * 100
             analysis_data.append({
-                "Coin": coin.replace("-USD", ""),
-                "CMP (USDT)": f"${curr:,.2f}",
+                "Coin": coin.replace("-INR", ""),
+                "CMP (INR)": f"₹{curr:,.2f}",
                 "24h Change %": f"{change:+.2f}%",
                 "Recommendation": rec,
                 "Vol. Score": f"{volatility:.1f}/10"
@@ -198,7 +200,7 @@ def show_crypto_bot_page():
     if analysis_data:
         st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
     else:
-        st.warning("Fetching market data...")
+        st.warning("Fetching market data (INR)...")
 
     st.markdown("---")
 
@@ -206,9 +208,9 @@ def show_crypto_bot_page():
     st.subheader("⚙️ Configure Grid Bot")
     c1, c2 = st.columns([1, 2])
     with c1:
-        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USDT)
+        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_INR)
         curr_price = get_current_price(selected_coin)
-        st.metric("Current Price", f"${curr_price:,.2f}")
+        st.metric("Current Price", f"₹{curr_price:,.2f}")
         
         if st.button("🧠 Auto-Pick Best Settings"):
             if curr_price > 0:
@@ -217,19 +219,19 @@ def show_crypto_bot_page():
                 st.session_state['auto_grids'] = 5
                 st.session_state['auto_tp'] = 2.0
                 st.session_state['auto_sl'] = 3.0
-                st.session_state['auto_inv'] = 50.0
+                st.session_state['auto_inv'] = 5000.0 # CHANGED DEFAULT TO 5000 INR
                 st.success("AI Settings Loaded!")
             else:
                 st.error("Wait for price to load.")
 
     with c2:
         col_a, col_b = st.columns(2)
-        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0))
-        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0))
+        lower_p = col_a.number_input("Lower Price (₹)", value=st.session_state.get('auto_lower', 0.0))
+        upper_p = col_b.number_input("Upper Price (₹)", value=st.session_state.get('auto_upper', 0.0))
         
         col_c, col_d = st.columns(2)
         grids = col_c.number_input("No. of Grids", min_value=2, max_value=20, value=st.session_state.get('auto_grids', 5))
-        invest = col_d.number_input("Investment (USDT)", value=st.session_state.get('auto_inv', 50.0))
+        invest = col_d.number_input("Investment (INR)", value=st.session_state.get('auto_inv', 5000.0))
         
         col_e, col_f = st.columns(2)
         tp_pct = col_e.number_input("Take Profit (%)", value=st.session_state.get('auto_tp', 2.0))
@@ -256,14 +258,14 @@ def show_crypto_bot_page():
         else:
             st.error("Invalid Config or Price unavailable.")
 
-    # --- C. ACTIVE BOT STATUS TABLE (CUSTOM LAYOUT) ---
+    # --- C. ACTIVE BOT STATUS TABLE ---
     st.markdown("---")
     st.subheader("📍 Active Grid Bots")
     
     active_bots = st.session_state["grid_bot_active"]
     
     if active_bots:
-        # 1. Header Row
+        # Header
         h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 2, 1])
         h1.markdown("**Coin**")
         h2.markdown("**Entry**")
@@ -281,54 +283,47 @@ def show_crypto_bot_page():
         total_curr = 0.0
         total_pnl = 0.0
 
-        # 2. Data Rows
-        # Iterate over a list of items to avoid runtime dict change errors
+        # Data Rows
         for b_id, data in list(active_bots.items()):
             cp = get_current_price(data['coin'])
             
-            # Calculations
             if cp > 0:
                 current_val = data['qty'] * cp
                 pnl = current_val - data['invest']
                 pnl_pct = (pnl / data['invest']) * 100
                 
-                # Check TP/SL
                 status_text = "🟢 Running"
                 if pnl_pct >= data['tp']: status_text = "✅ TP HIT"
                 elif pnl_pct <= -data['sl']: status_text = "❌ SL HIT"
                 
-                # Add to totals
                 total_inv += data['invest']
                 total_curr += current_val
                 total_pnl += pnl
                 
-                # Render Row
                 c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 2, 1])
                 
-                c1.write(data['coin'].replace("-USD",""))
-                c2.write(f"${data['entry_price']:.2f}")
-                c3.write(f"${cp:.2f}")
-                c4.write(f"${data['invest']:.2f}")
-                c5.write(f"${current_val:.2f}")
+                c1.write(data['coin'].replace("-INR",""))
+                c2.write(f"₹{data['entry_price']:,.2f}")
+                c3.write(f"₹{cp:,.2f}")
+                c4.write(f"₹{data['invest']:,.2f}")
+                c5.write(f"₹{current_val:,.2f}")
                 
-                # Color code PnL
                 pnl_color = "green" if pnl >= 0 else "red"
-                c6.markdown(f":{pnl_color}[${pnl:.2f}]")
+                c6.markdown(f":{pnl_color}[₹{pnl:,.2f}]")
                 
                 c7.write(status_text)
                 
-                # Individual Stop Button
                 if c8.button("Stop 🟥", key=f"stop_{b_id}"):
                     del st.session_state["grid_bot_active"][b_id]
                     st.rerun()
         
         st.markdown("<div style='border-bottom: 1px solid #ccc; margin-top: 10px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
         
-        # 3. Summary Footer
+        # Summary Footer
         f1, f2, f3 = st.columns(3)
-        f1.metric("Total Investment", f"${total_inv:,.2f}")
-        f2.metric("Present Value", f"${total_curr:,.2f}")
-        f3.metric("Total PnL", f"${total_pnl:,.2f}", delta_color="normal")
+        f1.metric("Total Investment", f"₹{total_inv:,.2f}")
+        f2.metric("Present Value", f"₹{total_curr:,.2f}")
+        f3.metric("Total PnL", f"₹{total_pnl:,.2f}", delta_color="normal")
         
     else:
         st.info("No Active Grid Bots. Configure and start one above.")
@@ -337,10 +332,10 @@ def show_crypto_bot_page():
 # PAGE 4: CRYPTO DASHBOARD
 # ---------------------------
 def show_crypto_dashboard_page():
-    st.title("🖥️ Global Crypto Dashboard")
+    st.title("🖥️ Global Crypto Dashboard (INR)")
     st_autorefresh(interval=300_000, key="dash_refresh")
 
-    dash_coin = st.sidebar.selectbox("Select Asset", CRYPTO_SYMBOLS_USDT)
+    dash_coin = st.sidebar.selectbox("Select Asset", CRYPTO_SYMBOLS_INR)
     time_range = st.sidebar.select_slider("Time Range", options=["1mo", "3mo", "6mo", "1y", "5y", "max"])
 
     data = get_safe_crypto_data(dash_coin, period=time_range)
@@ -351,8 +346,8 @@ def show_crypto_dashboard_page():
         chg = ((curr - prev)/prev)*100
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Current Price", f"${curr:,.2f}", f"{chg:.2f}%")
-        m2.metric("24h High", f"${data['High'].iloc[-1]:,.2f}")
+        m1.metric("Current Price", f"₹{curr:,.2f}", f"{chg:.2f}%")
+        m2.metric("24h High", f"₹{data['High'].iloc[-1]:,.2f}")
         m3.metric("Volume", f"{data['Volume'].iloc[-1]:,.0f}")
         
         fig = go.Figure(data=[go.Candlestick(x=data.index,
