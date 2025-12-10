@@ -89,22 +89,27 @@ def apply_custom_style():
             background-color: #d1d5db !important;
         }
 
-        /* --- DROPDOWN MENU FIX --- */
+        /* --- DROPDOWN MENU FIX (Manual Bot & Others) --- */
+        /* The input box itself */
         div[data-baseweb="select"] > div {
             background-color: #ffffff !important;
             color: #000000 !important;
             border: 1px solid #ced4da;
         }
+        /* The popup container */
         div[data-baseweb="popover"], div[data-baseweb="menu"] {
             background-color: #ffffff !important;
         }
+        /* The options inside the list */
         div[role="option"] {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
+        /* Hover effect on options */
         div[role="option"]:hover {
             background-color: #f0f2f6 !important;
         }
+        /* Selected item text color */
         div[data-baseweb="select"] span {
             color: #000000 !important; 
         }
@@ -270,6 +275,7 @@ def show_crypto_manual_bot_page():
     st.subheader("⚙️ Configure Manual Bot")
     c1, c2 = st.columns([1, 2])
     with c1:
+        # Style forced to white in CSS above
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
         curr_price = get_current_price(selected_coin)
         st.metric("Current Price", f"${curr_price:,.4f}")
@@ -366,7 +372,7 @@ def show_crypto_manual_bot_page():
         st.error("Chart data unavailable.")
 
 # ---------------------------
-# PAGE: CRYPTO AUTO PILOT
+# PAGE: AI AUTO-PILOT
 # ---------------------------
 def show_ai_autopilot_page():
     usd_inr = st.session_state["usd_inr"]
@@ -375,7 +381,7 @@ def show_ai_autopilot_page():
     secret_key = st.session_state.get("binance_secret")
     is_live = bool(api_key and secret_key)
     
-    st.title(f"🚀 Crypto Auto Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
+    st.title(f"🚀 AI Auto-Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
     if is_live: st.warning("⚠️ LIVE MONEY MODE ACTIVE")
     else: st.info("ℹ️ Simulation Mode")
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
@@ -383,13 +389,17 @@ def show_ai_autopilot_page():
     if not ap["running"]:
         st.subheader("🛠️ Setup Auto-Pilot")
         c1, c2, c3 = st.columns(3)
+        # 1. CURRENCY SELECTOR (Restored)
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
+        # 2. CAPITAL INPUT
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
         
         btn_label = "🚀 Launch LIVE AI" if is_live else "🚀 Launch Simulation"
         if c3.button(btn_label, type="primary", use_container_width=True):
             ap["running"] = True
             ap["mode"] = "LIVE" if is_live else "PAPER"
+            
+            # Logic to handle currency input
             ap["currency"] = "USDT" if "USDT" in currency_mode else "INR"
             if ap["currency"] == "INR":
                 ap["total_capital"] = capital_input / usd_inr
@@ -397,6 +407,7 @@ def show_ai_autopilot_page():
             else:
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
+            
             ap["active_grids"] = []
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
             st.rerun()
@@ -499,7 +510,7 @@ def show_ai_autopilot_page():
                     inv_inr = g['invest'] * usd_inr
                     val_inr = curr_val * usd_inr
                     pnl_inr = pnl * usd_inr
-                    msg = (f"🚨 *Crypto Auto Pilot Trade Closed*\n"
+                    msg = (f"🚨 *AI Auto-Pilot Trade Closed*\n"
                            f"Asset: {g['coin']}\n"
                            f"💰 Invested: ₹{inv_inr:,.2f}\n"
                            f"💵 Final Value: ₹{val_inr:,.2f}\n"
@@ -583,7 +594,7 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
-    page_crypto = st.sidebar.radio("Crypto Actions", ["Crypto Auto Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     
@@ -613,9 +624,9 @@ def main():
 
     if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
     if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
-    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" 
+    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
     
-    current_page = "Crypto Auto Pilot" 
+    current_page = "AI Auto-Pilot" 
     
     if page_stocks != st.session_state["last_stock_page"]:
         current_page = page_stocks
@@ -631,18 +642,16 @@ def main():
         else:
             current_page = page_crypto
 
-    # THREAD CONTEXT FIX
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
         # CRITICAL FIX FOR THREAD CONTEXT
-        from streamlit.runtime.scriptrunner import add_script_run_ctx
         add_script_run_ctx(t_crypto)
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
-    if current_page == "Crypto Auto Pilot":
+    if current_page == "AI Auto-Pilot":
         show_ai_autopilot_page()
     elif current_page == "Crypto Report":
         show_crypto_report_page()
