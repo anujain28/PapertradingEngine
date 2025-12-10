@@ -69,22 +69,18 @@ def apply_custom_style():
         }
 
         /* --- DROPDOWN MENU FIX (White BG, Black Text) --- */
-        /* The container of the selected value */
         div[data-baseweb="select"] > div {
             background-color: #ffffff !important;
             color: #000000 !important;
             border: 1px solid #ced4da;
         }
-        /* The dropdown popup */
         div[data-baseweb="popover"], div[data-baseweb="menu"] {
             background-color: #ffffff !important;
         }
-        /* The options inside */
         div[role="option"] {
             background-color: #ffffff !important;
             color: #000000 !important;
         }
-        /* Hover state */
         div[role="option"]:hover {
             background-color: #f0f2f6 !important;
         }
@@ -103,8 +99,6 @@ def apply_custom_style():
 IST = pytz.timezone("Asia/Kolkata")
 START_CAPITAL = 100000.0
 DB_PATH = "paper_trades.db"
-
-# We trade in USDT (USD) for the bot logic
 CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
 
 # ---------------------------
@@ -129,7 +123,7 @@ def get_current_price(symbol):
         pass
     return 0.0
 
-@st.cache_data(ttl=3600) # Cache exchange rate for 1 hour
+@st.cache_data(ttl=3600)
 def get_usd_inr_rate():
     try:
         data = yf.Ticker("INR=X").history(period="1d")
@@ -137,7 +131,7 @@ def get_usd_inr_rate():
             return data["Close"].iloc[-1]
     except:
         pass
-    return 84.0 # Fallback rate if API fails
+    return 84.0 # Fallback
 
 # ---------------------------
 # STATE MANAGEMENT
@@ -235,7 +229,6 @@ def show_crypto_bot_page():
     
     c1, c2 = st.columns([1, 2])
     with c1:
-        # SELECT BOX BACKGROUND IS WHITE VIA CSS ABOVE
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD)
         curr_price = get_current_price(selected_coin)
         st.metric("Current Price", f"${curr_price:,.2f}")
@@ -332,5 +325,102 @@ def show_crypto_bot_page():
                 val_inr = current_val_usd * usd_inr
                 pnl_inr = pnl_usd * usd_inr
 
-                # Display Row
-                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.2, 1.2, 1.2, 2.0, 2.0, 2
+                # Display Row - FIXING THE ERROR HERE
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.2, 1.2, 1.2, 2.0, 2.0, 2.0, 1.5, 1])
+                
+                c1.write(data['coin'].replace("-USD",""))
+                c2.write(f"${data['entry_price']:.2f}")
+                c3.write(f"${cp:.2f}")
+                
+                # DUAL CURRENCY COLUMNS
+                c4.write(f"${data['invest']:.1f} / ₹{inv_inr:,.0f}")
+                c5.write(f"${current_val_usd:.1f} / ₹{val_inr:,.0f}")
+                
+                pnl_color = "green" if pnl_usd >= 0 else "red"
+                c6.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
+                
+                c7.write(status_text)
+                
+                if c8.button("Stop 🟥", key=f"stop_{b_id}"):
+                    del st.session_state["grid_bot_active"][b_id]
+                    st.rerun()
+        
+        st.markdown("<div style='border-bottom: 1px solid #ccc; margin-top: 10px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+        
+        # Summary Footer
+        total_inv_inr = total_inv_usd * usd_inr
+        total_pnl_inr = total_pnl_usd * usd_inr
+        
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Total Investment", f"${total_inv_usd:,.0f} (₹{total_inv_inr:,.0f})")
+        f2.metric("Total PnL", f"${total_pnl_usd:,.2f} (₹{total_pnl_inr:,.0f})", delta_color="normal")
+        f3.caption(f"Exchange Rate Used: 1 USD = ₹{usd_inr:.2f}")
+
+    else:
+        st.info("No Active Grid Bots. Configure and start one above.")
+
+# ---------------------------
+# PAGE 4: CRYPTO DASHBOARD
+# ---------------------------
+def show_crypto_dashboard_page():
+    st.title("🖥️ Global Crypto Dashboard (USD)")
+    st_autorefresh(interval=300_000, key="dash_refresh")
+
+    dash_coin = st.sidebar.selectbox("Select Asset", CRYPTO_SYMBOLS_USD)
+    time_range = st.sidebar.select_slider("Time Range", options=["1mo", "3mo", "6mo", "1y", "5y", "max"])
+
+    data = get_safe_crypto_data(dash_coin, period=time_range)
+    
+    if data is not None:
+        curr = data['Close'].iloc[-1]
+        prev = data['Close'].iloc[-2]
+        chg = ((curr - prev)/prev)*100
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Current Price", f"${curr:,.2f}", f"{chg:.2f}%")
+        m2.metric("24h High", f"${data['High'].iloc[-1]:,.2f}")
+        m3.metric("Volume", f"{data['Volume'].iloc[-1]:,.0f}")
+        
+        fig = go.Figure(data=[go.Candlestick(x=data.index,
+                        open=data['Open'], high=data['High'],
+                        low=data['Low'], close=data['Close'])])
+        
+        fig.update_layout(
+            height=500, margin=dict(l=0,r=0,t=0,b=0),
+            plot_bgcolor='black', paper_bgcolor='black',     
+            xaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
+            yaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
+            font=dict(color='white')   
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("Data unavailable.")
+
+# ---------------------------
+# MAIN EXECUTION
+# ---------------------------
+def main():
+    apply_custom_style()
+    st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log", "Crypto Bot", "Crypto Dashboard"])
+
+    if not st.session_state.get("loop_started", False):
+        st.session_state["loop_started"] = True
+    
+    if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
+        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        t_crypto.start()
+        st.session_state["crypto_loop_started"] = True
+
+    if page == "Paper Trading":
+        show_paper_trading_page()
+    elif page == "PNL Log":
+        show_pnl_page()
+    elif page == "Crypto Bot":
+        show_crypto_bot_page()
+    elif page == "Crypto Dashboard":
+        show_crypto_dashboard_page()
+
+if __name__ == "__main__":
+    main()
