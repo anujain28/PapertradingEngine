@@ -96,6 +96,15 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
+        /* Table / Dataframe Styling Override for Visibility */
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+            color: #000000 !important;
+            background-color: #ffffff !important;
+        }
+        div[data-testid="stTable"] {
+            color: #000000 !important;
+        }
+        
         /* Chart Override */
         .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
@@ -164,7 +173,6 @@ if "autopilot" not in st.session_state:
         "active_grids": [], "logs": [], "history": []
     }
 else:
-    # Ensure all keys exist
     defaults = {
         "running": False, "mode": "PAPER", "currency": "USDT",
         "total_capital": 0.0, "cash_balance": 0.0,
@@ -322,7 +330,8 @@ def show_ai_autopilot_page():
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
         
-        if c3.button("🚀 Launch AI", type="primary", use_container_width=True):
+        btn_label = "🚀 Launch LIVE AI" if is_live else "🚀 Launch Simulation"
+        if c3.button(btn_label, type="primary", use_container_width=True):
             ap["running"] = True
             ap["mode"] = "LIVE" if is_live else "PAPER"
             ap["currency"] = "USDT" if "USDT" in currency_mode else "INR"
@@ -333,14 +342,16 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
             ap["active_grids"] = []
-            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
+            ap["logs"].append(f"[{dt.datetime.now(IST).strftime('%H:%M:%S')}] Engine Started.")
             st.rerun()
     else:
-        st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
+        # STATUS BANNER with TIMESTAMP
+        now_ist = dt.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')
+        st.success(f"✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids... (Updated: {now_ist})")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
-        # Calculate Invested (Safe Access)
+        # SAFE ACCESS
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         
         grid_current_val = 0.0
@@ -359,17 +370,18 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # SCANNER
+        # SCANNER LOGIC
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             if not any(g['coin'] == scan_coin for g in ap['active_grids']):
                 cp = get_current_price(scan_coin)
+                # Chance logic
                 chance = random.randint(1, 10)
                 if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
                     # Grid Params
-                    lower = cp*0.95
-                    upper = cp*1.05
+                    lower = cp * 0.95
+                    upper = cp * 1.05
                     grid_levels = np.linspace(lower, upper, 5)
                     grid_orders = []
                     for lvl in grid_levels:
@@ -377,15 +389,17 @@ def show_ai_autopilot_page():
                         else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
 
                     new_grid = {
-                        "coin": scan_coin, "entry": cp, "lower": lower, "upper": upper,
-                        "qty": invest_amt/cp, "invest": invest_amt, "grids": 5, "tp": 2.0, "sl": 3.0,
-                        "orders": grid_orders
+                        "coin": scan_coin, "entry": cp, 
+                        "lower": lower, "upper": upper,
+                        "qty": invest_amt/cp, "invest": invest_amt, 
+                        "grids": 5, "tp": 2.0, "sl": 3.0,
+                        "orders": grid_orders # SAVE ORDERS
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] Deployed Grid: {scan_coin}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
                 elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral.")
 
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]:
@@ -393,6 +407,7 @@ def show_ai_autopilot_page():
 
         st.markdown("---")
 
+        # ACTIVE GRIDS TABLE
         st.subheader(f"💼 Active Grids")
         if ap['active_grids']:
             # Headers
@@ -400,7 +415,7 @@ def show_ai_autopilot_page():
             c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
             c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
             
-            # --- TOTALS VARIABLES ---
+            # Totals
             sum_inv = 0.0
             sum_val = 0.0
             sum_pnl = 0.0
@@ -415,20 +430,31 @@ def show_ai_autopilot_page():
                 sum_val += curr_val
                 sum_pnl += pnl
                 
+                # REGENERATE ORDERS IF MISSING (SAFETY FIX)
+                if 'orders' not in g or not g['orders']:
+                    g_levels = np.linspace(g['lower'], g['upper'], 5)
+                    new_orders = []
+                    for lvl in g_levels:
+                        if lvl < cp: new_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
+                        else: new_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
+                    g['orders'] = new_orders
+
                 c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
                 c1.write(g['coin'].replace("-USD",""))
-                c2.write(f"${g['lower']:.4f}-${g['upper']:.4f}")
-                c3.write(f"{g.get('grids',5)} Grids | TP {g.get('tp',2.0)}%") # SHOW CONFIG
+                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}") # 4 DECIMAL FIX
+                c3.write(f"{g.get('grids',5)} Grids | TP {g.get('tp',2.0)}%")
                 c4.write(f"${g['invest']:.2f}")
                 c5.write(f"${curr_val:.2f}")
                 c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
-                if c7.button("Stop", key=f"ap_stop_{i}"):
+                
+                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
                     ap['cash_balance'] += curr_val
                     ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": (pnl/g['invest'])*100})
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
                     ap['active_grids'].pop(i)
                     st.rerun()
             
-            # --- TOTALS ROW ---
+            # Totals Row
             st.markdown("<div style='border-top:1px solid #ddd; padding-top:10px; margin-top:5px;'></div>", unsafe_allow_html=True)
             f1, f2, f3, f4, f5, f6, f7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
             f1.write("**TOTALS**")
@@ -438,17 +464,23 @@ def show_ai_autopilot_page():
             f6.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
 
             st.markdown("---")
+            # LIVE ORDERS TABLE
             st.markdown("### 📋 Live Grid Orders")
             for g in ap['active_grids']:
                 with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
-                    if 'orders' in g:
+                    if 'orders' in g and g['orders']:
                         ord_df = pd.DataFrame(g['orders'])
+                        # Format for display
                         ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
-                        st.dataframe(ord_df, use_container_width=True)
+                        st.table(ord_df) # Use st.table for better visibility of simple data
+                    else:
+                        st.write("Generating orders...")
         else:
             st.info("Scanning for opportunities...")
         
-        if st.button("⏹ Stop"): ap["running"] = False; st.rerun()
+        if st.button("⏹ Stop Engine"): 
+            ap["running"] = False
+            st.rerun()
 
 # ---------------------------
 # PAGE: CRYPTO REPORT
@@ -458,6 +490,8 @@ def show_crypto_report_page():
     ap = st.session_state["autopilot"]
     usd_inr = st.session_state["usd_inr"]
     
+    st_autorefresh(interval=30_000, key="report_refresh")
+
     st.subheader("🔴 Live Portfolio")
     running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
     running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
@@ -476,7 +510,10 @@ def show_crypto_report_page():
         m1, m2 = st.columns(2)
         m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
         m2.metric("Trades", len(df))
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
     else:
         st.info("No closed trades.")
 
@@ -489,13 +526,10 @@ def main():
     
     st.sidebar.title("Navigation")
     
-    # --- UPDATED NAVIGATION STRUCTURE ---
-    
-    # 1. Stocks Menu (Top)
+    # Updated Navigation: Stocks Top, Crypto Bottom
     st.sidebar.subheader("📈 Stocks Menu")
     page_stocks = st.sidebar.radio("Stocks Actions", ["Paper Trading", "PNL Log", "Auto-Pilot App"], label_visibility="collapsed")
     
-    # 2. Crypto Menu (Bottom)
     st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
     page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
@@ -509,82 +543,60 @@ def main():
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
 
-    # --- ROUTING LOGIC ---
-    # We need to determine which menu was clicked last or prioritize. 
-    # Streamlit re-runs the whole script, so we can check which radio button changed? 
-    # Actually, simpler: Use a session state to track 'active_section'
+    # LOGIC TO DECIDE PAGE
+    # We prioritize the radio that was clicked last. 
+    # Since we can't easily detect that, we use a simple toggle:
+    # If user interacts with Crypto menu, we show Crypto.
+    # To fix the "no selection" issue, we just need to ensure the active section matches.
+    # The simplest way without complex state is to check which radio matches the current view state or just render both menus.
     
-    # Simple Toggle: If user selects from Crypto, we show Crypto. If Stocks, Stocks.
-    # Since radio buttons default to first option, we need a way to switch.
-    # Let's use a unified approach or check state.
-    
-    # Better approach: Just show the selected page based on unique names.
-    # I renamed Crypto options slightly to avoid conflict.
-    
-    # Combined Logic:
-    # Since st.sidebar.radio is stateless across reruns unless we track it,
-    # and we have two radios, one will always have a value.
-    # We will prioritize the one that was 'changed' or just use a single radio with headers (not possible native).
-    # Workaround: Use 'Select Market' logic internally but display as separate blocks visually?
-    # NO, user asked for "stock menu at top and crypto menu below".
-    
-    # HACK: We can't detect which radio was *clicked*. 
-    # Solution: We will use a single radio but format the options to look like sections, 
-    # OR we use buttons.
-    # Let's try the single radio with headers in the options? No, ugly.
-    
-    # Let's revert to "Select Market" radio at the very top to toggle visibility, 
-    # BUT keep the menus visible? No, user said "no selection".
-    
-    # FIX: We will put all pages in ONE radio but use separators in the list?
-    # No, let's use the unique keys.
-    
-    # ACTUALLY, Streamlit runs top-down. 
-    # If we have two radios, they both return a value. 
-    # We need to know which one is 'active'.
-    # We can add a 'key' to state.
-    
-    # Let's stick to the previous robust "Select Market" toggle for now as it guarantees stability,
-    # UNLESS I assume user meant "Visual Grouping".
-    # I will try to group them in one Radio for perfect navigation.
-    
-    all_pages = [
-        "--- STOCKS ---", 
-        "Stocks: Paper Trading", 
-        "Stocks: PNL Log", 
-        "Stocks: Auto-Pilot (App1)",
-        "--- CRYPTO ---",
-        "Crypto: AI Auto-Pilot", 
-        "Crypto: Report", 
-        "Crypto: Manual Bot"
-    ]
-    
-    # Custom formatting function to make headers look different (not clickable ideally, but...)
-    # Actually, let's just use the two-radio approach but use session state to track the active one.
-    
-    # Implementing the Session State Switcher for Dual Menus
-    if "current_mode" not in st.session_state:
-        st.session_state["current_mode"] = "crypto" # Default
+    # Hack: We use session state to track 'active_tab'.
+    if "active_tab" not in st.session_state:
+        st.session_state["active_tab"] = "AI Auto-Pilot" # Default
 
-    # Stocks Radio
-    st.sidebar.header("📈 Stocks")
-    # We use a callback to set mode
-    def set_stocks(): st.session_state["current_mode"] = "stocks"
-    s_page = st.sidebar.radio("Stocks", ["Dashboard", "PNL Log", "Auto-Pilot App"], key="s_radio", on_change=set_stocks)
-
-    st.sidebar.markdown("---")
+    # Update state based on radios? No, radios return value immediately.
+    # We will assume: if the Stocks radio value changes, we switch to stocks. 
+    # BUT Streamlit re-runs script. 
+    # Let's just use the "Select Market" approach again, it was robust.
+    # User said "do not make a selection", meaning show BOTH menus.
+    # So we need to know WHICH item was clicked.
     
-    # Crypto Radio
-    st.sidebar.header("🪙 Crypto")
-    def set_crypto(): st.session_state["current_mode"] = "crypto"
-    c_page = st.sidebar.radio("Crypto", ["AI Auto-Pilot", "Report", "Manual Bot"], key="c_radio", on_change=set_crypto)
-
-    # Decision
-    final_page = ""
-    if st.session_state["current_mode"] == "stocks":
-        final_page = s_page
+    # We can try to infer. But simpler:
+    # We check if `page_stocks` changed from last run?
+    # Let's just assume if the user is on a Stocks page, we show stocks content.
+    
+    # Let's rely on a combined list if possible? No.
+    # We will use the previous logic but keep the visual separation requested.
+    
+    # REVERTING to separate display logic to ensure robustness:
+    # We will use a "Mode" toggle at the very top (invisible or minimal) OR
+    # just check if the returned value belongs to Stocks or Crypto.
+    
+    # Since the names are unique:
+    all_crypto_pages = ["AI Auto-Pilot", "Crypto Report", "Manual Bot"]
+    all_stock_pages = ["Paper Trading", "PNL Log", "Auto-Pilot App"]
+    
+    # We need a way to switch. The best way with two radios is to check which one changed.
+    # We will store the 'last' value of each radio.
+    if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
+    if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
+    
+    current_page = "AI Auto-Pilot" # Default
+    
+    if page_stocks != st.session_state["last_stock_page"]:
+        current_page = page_stocks
+        st.session_state["active_section"] = "stocks"
+        st.session_state["last_stock_page"] = page_stocks
+    elif page_crypto != st.session_state["last_crypto_page"]:
+        current_page = page_crypto
+        st.session_state["active_section"] = "crypto"
+        st.session_state["last_crypto_page"] = page_crypto
     else:
-        final_page = c_page
+        # No change, use active section's value
+        if st.session_state.get("active_section") == "stocks":
+            current_page = page_stocks
+        else:
+            current_page = page_crypto
 
     # --- THREADS ---
     if not st.session_state.get("loop_started", False):
@@ -595,24 +607,19 @@ def main():
         st.session_state["crypto_loop_started"] = True
 
     # --- ROUTING ---
-    if st.session_state["current_mode"] == "stocks":
-        if STOCKS_MODULE_AVAILABLE:
-            if final_page == "Auto-Pilot App":
-                app1.run_stocks_app() # This runs the stocks app logic
-            elif final_page == "Dashboard":
-                app1.show_stocks_dashboard() # Assuming you add this to app1 or keep separate
-            else:
-                show_paper_trading_page() # Placeholder for PNL
-        else:
-            st.error("app1.py missing")
-            
-    else: # Crypto Mode
-        if final_page == "AI Auto-Pilot":
-            show_ai_autopilot_page()
-        elif final_page == "Report":
-            show_crypto_report_page()
-        elif final_page == "Manual Bot":
-            show_crypto_manual_bot_page()
+    if current_page == "AI Auto-Pilot":
+        show_ai_autopilot_page()
+    elif current_page == "Crypto Report":
+        show_crypto_report_page()
+    elif current_page == "Manual Bot":
+        show_crypto_manual_bot_page()
+    elif current_page == "Auto-Pilot App":
+        if STOCKS_MODULE_AVAILABLE: app1.run_stocks_app()
+        else: st.error("app1.py missing")
+    elif current_page == "Paper Trading":
+        show_paper_trading_page()
+    elif current_page == "PNL Log":
+        show_pnl_page()
 
 if __name__ == "__main__":
     main()
