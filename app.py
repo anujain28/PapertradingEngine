@@ -17,7 +17,7 @@ from telegram.ext import Application
 import yfinance as yf
 import plotly.graph_objects as go
 
-# --- NEW IMPORT FOR THREAD CONTEXT FIX ---
+# --- CRITICAL FIX FOR THREAD CONTEXT ---
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # --- IMPORT STOCK MODULE ---
@@ -64,7 +64,7 @@ def apply_custom_style():
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
-            caret-color: #ffffff !important;
+            caret-color: #ffffff !important; /* White cursor */
             border: 1px solid #555 !important;
         }
         section[data-testid="stSidebar"] div[data-baseweb="input"] {
@@ -109,7 +109,7 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* --- EXPANDER & TABLE FIX --- */
+        /* --- EXPANDER & TABLE VISIBILITY FIX --- */
         div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
@@ -119,7 +119,9 @@ def apply_custom_style():
             background-color: #ffffff !important;
         }
         div[data-testid="stExpander"] table, 
-        div[data-testid="stExpander"] td, 
+        div[data-testid="stExpander"] tbody, 
+        div[data-testid="stExpander"] tr, 
+        div[data-testid="stExpander"] td,
         div[data-testid="stExpander"] th {
             color: #000000 !important;
             background-color: #ffffff !important;
@@ -235,37 +237,7 @@ if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
 
 # ---------------------------
-# DATABASE
-# ---------------------------
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, side TEXT, qty INTEGER, price REAL, timestamp TEXT, pnl REAL)""")
-    conn.commit()
-    conn.close()
-init_db()
-
-# ---------------------------
-# PAGE 1: PAPER TRADING (STOCKS)
-# ---------------------------
-def show_paper_trading_page():
-    st.title("📈 AI Stocks Paper Trading")
-    st_autorefresh(interval=120_000, key="auto_refresh")
-    state = st.session_state["state"]
-    col1, col2 = st.columns(2)
-    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
-    col2.metric("Equity", f"₹{state['equity']:,.2f}")
-    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
-
-# ---------------------------
-# PAGE 2: PNL LOG (STOCKS)
-# ---------------------------
-def show_pnl_page():
-    st.title("📊 Stocks PNL Log")
-    st.write("PNL Data will appear here once trades execute.")
-
-# ---------------------------
-# PAGE 3: CRYPTO BOT (GRID TRADING)
+# PAGE: CRYPTO MANUAL BOT
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -394,7 +366,7 @@ def show_crypto_manual_bot_page():
         st.error("Chart data unavailable.")
 
 # ---------------------------
-# PAGE: AI AUTO-PILOT
+# PAGE: CRYPTO AUTO PILOT
 # ---------------------------
 def show_ai_autopilot_page():
     usd_inr = st.session_state["usd_inr"]
@@ -403,7 +375,7 @@ def show_ai_autopilot_page():
     secret_key = st.session_state.get("binance_secret")
     is_live = bool(api_key and secret_key)
     
-    st.title(f"🚀 AI Auto-Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
+    st.title(f"🚀 Crypto Auto Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
     if is_live: st.warning("⚠️ LIVE MONEY MODE ACTIVE")
     else: st.info("ℹ️ Simulation Mode")
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
@@ -527,7 +499,7 @@ def show_ai_autopilot_page():
                     inv_inr = g['invest'] * usd_inr
                     val_inr = curr_val * usd_inr
                     pnl_inr = pnl * usd_inr
-                    msg = (f"🚨 *AI Auto-Pilot Trade Closed*\n"
+                    msg = (f"🚨 *Crypto Auto Pilot Trade Closed*\n"
                            f"Asset: {g['coin']}\n"
                            f"💰 Invested: ₹{inv_inr:,.2f}\n"
                            f"💵 Final Value: ₹{val_inr:,.2f}\n"
@@ -611,11 +583,10 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
-    page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    page_crypto = st.sidebar.radio("Crypto Actions", ["Crypto Auto Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     
-    # 1. Telegram Config
     with st.sidebar.expander("📢 Telegram Alerts"):
         tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
         tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
@@ -624,7 +595,6 @@ def main():
             st.session_state["tg_chat_id"] = tg_chat
             st.success("Saved!")
 
-    # 2. Binance Config
     with st.sidebar.expander("🔌 Binance Keys"):
         api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
         sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
@@ -633,7 +603,6 @@ def main():
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
 
-    # 3. Dhan Config
     with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
         d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
         d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
@@ -644,9 +613,9 @@ def main():
 
     if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
     if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
-    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
+    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" 
     
-    current_page = "AI Auto-Pilot" 
+    current_page = "Crypto Auto Pilot" 
     
     if page_stocks != st.session_state["last_stock_page"]:
         current_page = page_stocks
@@ -662,28 +631,31 @@ def main():
         else:
             current_page = page_crypto
 
-    # --- THREADS Fix with Context ---
+    # THREAD CONTEXT FIX
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
-        # CRITICAL FIX FOR THREAD CONTEXT WARNING
-        add_script_run_ctx(t_crypto) 
+        # CRITICAL FIX FOR THREAD CONTEXT
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+        add_script_run_ctx(t_crypto)
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
-    # Routing
-    if current_page == "AI Auto-Pilot":
+    if current_page == "Crypto Auto Pilot":
         show_ai_autopilot_page()
     elif current_page == "Crypto Report":
         show_crypto_report_page()
     elif current_page == "Manual Bot":
         show_crypto_manual_bot_page()
+    elif current_page == "Auto-Pilot App":
+        if STOCKS_MODULE_AVAILABLE: app1.run_stocks_app()
+        else: st.error("app1.py missing")
     elif current_page == "Bomb Stocks":
-        if STOCKS_MODULE_AVAILABLE:
-            app1.run_stocks_app()
-        else:
-            st.error("Stocks module (app1.py) not found.")
+        if STOCKS_MODULE_AVAILABLE: app1.run_stocks_app()
+        else: st.error("app1.py missing")
+    elif current_page == "Paper Trading":
+        show_paper_trading_page()
     elif current_page == "PNL Log":
         show_pnl_page()
 
