@@ -16,6 +16,63 @@ from telegram.ext import Application
 from nsepython import nse_quote_ltp  # NSEPython for LTP [web:73][web:75]
 
 # ---------------------------
+# PAGE CONFIG + GLOBAL STYLE
+# ---------------------------
+st.set_page_config(page_title="AI Paper Trading", layout="wide")
+
+
+def apply_custom_style():
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"]  {
+            font-family: Inter, system-ui, -apple-system, "Segoe UI",
+                         Roboto, "Helvetica Neue", Arial, sans-serif !important;
+        }
+        .stApp {
+            background-color: #f3f4f6 !important;  /* soft grey */
+            color: #0f172a !important;
+        }
+        /* Center main content and control width */
+        div.block-container {
+            max-width: 1100px;
+            padding-top: 1.2rem;
+            padding-bottom: 2rem;
+            margin: 0 auto;
+        }
+        /* Metrics / cards spacing */
+        .stMetric {
+            padding-top: 4px;
+            padding-bottom: 4px;
+        }
+        /* Tables */
+        div[data-testid="stDataFrame"] table {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-collapse: collapse !important;
+        }
+        div[data-testid="stDataFrame"] th,
+        div[data-testid="stDataFrame"] td {
+            border-color: #e5e7eb !important;
+            font-size: 0.9rem !important;
+            padding: 6px 10px !important;
+        }
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background-color: #f9fafb !important;
+        }
+        /* Buttons */
+        .stButton>button {
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------
 # CONFIG
 # ---------------------------
 IST = pytz.timezone("Asia/Kolkata")
@@ -595,7 +652,7 @@ def sidebar_config():
 
 
 def main():
-    st.set_page_config(page_title="AI Paper Trading", layout="wide")
+    apply_custom_style()
     sidebar_config()
 
     # Start engine loop once
