@@ -1,10 +1,12 @@
 # app.py
+import os
 import time
 import threading
 import datetime as dt
 import sqlite3
 from typing import Dict, List, Optional
 
+import configparser
 import pytz
 import requests
 import pandas as pd
@@ -26,10 +28,38 @@ TRAIL_PCT_DEFAULT = 0.02  # 2% trailing stop
 
 AIROBOTS_URL = "https://airobots.streamlit.app/"
 DB_PATH = "paper_trades.db"
+CONFIG_PATH = "telegram_config.ini"
 
-# Telegram config: put these in .streamlit/secrets.toml in production
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+# ---------------------------
+# TELEGRAM CONFIG (LOCAL FILE)
+# ---------------------------
+def load_telegram_config():
+    cfg = configparser.ConfigParser()
+    if os.path.exists(CONFIG_PATH):
+        cfg.read(CONFIG_PATH)
+    token = ""
+    chat_id = ""
+    if "telegram" in cfg:
+        token = cfg["telegram"].get("token", "")
+        chat_id = cfg["telegram"].get("chat_id", "")
+    return token, chat_id
+
+
+def save_telegram_config(token: str, chat_id: str):
+    cfg = configparser.ConfigParser()
+    if os.path.exists(CONFIG_PATH):
+        cfg.read(CONFIG_PATH)
+    if "telegram" not in cfg:
+        cfg["telegram"] = {}
+    cfg["telegram"]["token"] = token.strip()
+    cfg["telegram"]["chat_id"] = chat_id.strip()
+    with open(CONFIG_PATH, "w") as f:
+        cfg.write(f)
+
+
+TELEGRAM_TOKEN, TELEGRAM_CHAT_ID = load_telegram_config()
+
 
 # ---------------------------
 # GLOBAL STATE (IN MEMORY)
@@ -41,12 +71,22 @@ if "state" not in st.session_state:
         "positions": {},   # symbol -> position dict
     }
 
+if "engine_status" not in st.session_state:
+    st.session_state.engine_status = "Idle"
+
+if "engine_running" not in st.session_state:
+    st.session_state.engine_running = False
+
 if "loop_started" not in st.session_state:
     st.session_state.loop_started = False
+
+if "telegram_started" not in st.session_state:
+    st.session_state.telegram_started = False
 
 if "report_time" not in st.session_state:
     # Default daily report time 16:00 IST
     st.session_state.report_time = dt.time(16, 0)
+
 
 # ---------------------------
 # DB INIT
@@ -84,14 +124,14 @@ def init_db():
 
 init_db()
 
+
 # ---------------------------
 # MARKET DATA / AIROBOTS
 # ---------------------------
 def fetch_top5_from_airobots() -> List[Dict]:
     """
-    Try to read the first HTML table from AI Robots app,
-    and pick top 5 rows by 'Profit %'.
-    Adjust the table index / column names as per your app.
+    Read first HTML table from AI Robots app,
+    pick top 5 by 'Profit %'. Adjust column names as per actual app.
     """
     try:
         resp = requests.get(AIROBOTS_URL, timeout=15)
@@ -100,9 +140,8 @@ def fetch_top5_from_airobots() -> List[Dict]:
         if not tables:
             return []
         df = tables[0].copy()
-        # Try to standardize column names
         df.columns = [str(c).strip() for c in df.columns]
-        # Guess column names (change if needed)
+
         profit_col = None
         symbol_col = None
         for c in df.columns:
@@ -111,8 +150,10 @@ def fetch_top5_from_airobots() -> List[Dict]:
                 profit_col = c
             if "symbol" in lc or "stock" in lc or "ticker" in lc:
                 symbol_col = c
+
         if profit_col is None or symbol_col is None:
             return []
+
         df = df.sort_values(profit_col, ascending=False).head(5)
         df.rename(columns={symbol_col: "Symbol", profit_col: "Profit %"}, inplace=True)
         return df.to_dict(orient="records")
@@ -277,23 +318,45 @@ def run_trading_cycle(now: dt.datetime):
     """
     batch_trades: List[Dict] = []
 
+    st.session_state.engine_status = (
+        f"Running cycle at {now.strftime('%H:%M:%S')} – fetching top 5 from AI Robots..."
+    )
     top5 = fetch_top5_from_airobots()
+
+    st.session_state.engine_status = (
+        f"Updating positions & trailing stops at {now.strftime('%H:%M:%S')}..."
+    )
     update_positions_and_trails(now, batch_trades)
+
+    st.session_state.engine_status = (
+        f"Evaluating new entries for {len(top5)} candidates..."
+    )
     rebalance_entries(top5, now, batch_trades)
+
     recompute_equity()
     persist_trades(batch_trades)
     persist_equity_snapshot(now)
+    st.session_state.engine_status = "Cycle complete. Waiting for next run."
 
 
 def trading_loop():
     """
-    Background loop; runs only on weekdays between 9:30 and 15:30 IST.
-    Sleeps 120 seconds between cycles.
+    Background loop; respects engine_running flag.
+    Runs only on weekdays between 9:30 and 15:30 IST.
     """
     while True:
+        if not st.session_state.engine_running:
+            st.session_state.engine_status = "Engine stopped."
+            time.sleep(2)
+            continue
+
         now = dt.datetime.now(IST)
         if now.weekday() < 5 and TRADING_START <= now.time() <= TRADING_END:
             run_trading_cycle(now)
+        else:
+            st.session_state.engine_status = (
+                "Engine running but outside market hours (9:30–15:30 IST)."
+            )
         time.sleep(120)
 
 
@@ -371,22 +434,17 @@ async def _start_telegram_jobs():
     )
     await app.initialize()
     await app.start()
-    # This will keep running; in Streamlit hosting, your main process
-    # is usually long-lived.
     await app.updater.start_polling()
 
 
 def start_telegram_scheduler_if_needed():
-    if "telegram_started" not in st.session_state:
-        st.session_state.telegram_started = False
     if st.session_state.telegram_started:
         return
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    # Fire and forget async loop in background thread
+
     def runner():
         import asyncio
-
         asyncio.run(_start_telegram_jobs())
 
     threading.Thread(target=runner, daemon=True).start()
@@ -401,6 +459,15 @@ def show_paper_trading_page():
 
     # Auto-refresh every 2 minutes
     st_autorefresh(interval=120_000, key="auto_refresh")
+
+    # Engine status banner
+    status = st.session_state.engine_status
+    if status.lower().startswith("running"):
+        st.info(f"🟢 Engine status: {status}")
+    elif "stopped" in status.lower():
+        st.warning(f"🛑 Engine status: {status}")
+    else:
+        st.info(f"ℹ️ Engine status: {status}")
 
     state = st.session_state.state
 
@@ -419,7 +486,7 @@ def show_paper_trading_page():
         st.info("No open positions currently. Engine will auto-scan and enter trades during market hours.")
 
     st.caption(
-        "Engine runs automatically from 9:30 AM to 3:30 PM IST, "
+        "Engine runs automatically from 9:30 AM to 3:30 PM IST when started, "
         "fetches top 5 stocks from AI Robots, uses up to 60% of capital, "
         "trails profits, and never exits at a loss (positions are carried forward)."
     )
@@ -443,9 +510,29 @@ def show_pnl_page():
 def sidebar_config():
     st.sidebar.header("⚙️ Configuration")
 
-    # Telegram report time
+    # Telegram config (local file)
+    st.sidebar.subheader("Telegram settings (local)")
+
+    token_input = st.sidebar.text_input(
+        "Bot token",
+        value=TELEGRAM_TOKEN,
+        type="password",
+        help="Saved in telegram_config.ini on this machine.",
+    )
+    chat_input = st.sidebar.text_input(
+        "Chat ID",
+        value=TELEGRAM_CHAT_ID,
+        help="Your personal / group chat id for reports.",
+    )
+
+    if st.sidebar.button("💾 Save Telegram config"):
+        save_telegram_config(token_input, chat_input)
+        st.sidebar.success("Telegram config saved locally. Restart app to reload.")
+
+    # Report time
     report_time_str = st.sidebar.text_input(
-        "Telegram report time (HH:MM, IST)", value=f"{st.session_state.report_time.hour:02d}:{st.session_state.report_time.minute:02d}"
+        "Telegram report time (HH:MM, IST)",
+        value=f"{st.session_state.report_time.hour:02d}:{st.session_state.report_time.minute:02d}",
     )
     try:
         hh, mm = report_time_str.split(":")
@@ -454,10 +541,22 @@ def sidebar_config():
     except Exception:
         st.sidebar.warning("Invalid time format. Use HH:MM (e.g. 16:00).")
 
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        st.sidebar.success("Telegram is configured. Daily report will be sent on weekdays.")
+    if token_input and chat_input:
+        st.sidebar.success("Telegram configured. Daily report will be sent on weekdays.")
     else:
-        st.sidebar.info("Set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID in Streamlit secrets for Telegram reports.")
+        st.sidebar.info("Enter bot token & chat id above to enable Telegram reports.")
+
+    # Engine control
+    st.sidebar.subheader("Engine control")
+    col_a, col_b = st.sidebar.columns(2)
+    with col_a:
+        if st.button("▶️ Start engine"):
+            st.session_state.engine_running = True
+            st.session_state.engine_status = "Engine started. Waiting for market window."
+    with col_b:
+        if st.button("⏹ Stop engine"):
+            st.session_state.engine_running = False
+            st.session_state.engine_status = "Engine stopped by user."
 
 
 def main():
