@@ -12,6 +12,7 @@ streamlit-autorefresh
 openpyxl
 python-telegram-bot
 httpx
+configparser
 
 
 
