@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Streamlit / app secrets & runtime
+config.json
+.streamlit/
+*.db
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
