@@ -149,16 +149,15 @@ if "grid_bot_active" not in st.session_state:
 if "usd_inr" not in st.session_state:
     st.session_state["usd_inr"] = get_usd_inr_rate()
 
-# --- NEW: AI AUTO-PILOT STATE ---
+# --- AI AUTO-PILOT STATE ---
 if "autopilot" not in st.session_state:
     st.session_state["autopilot"] = {
         "running": False,
         "currency": "USDT",
         "total_capital": 0.0,
         "cash_balance": 0.0,
-        "positions": [], # List of dicts: {coin, entry, qty, type}
-        "logs": [],
-        "last_scan": None
+        "positions": [], # List of dicts: {coin, entry, qty, time}
+        "logs": []
     }
 
 for key in ["engine_status", "engine_running", "loop_started", 
@@ -181,10 +180,10 @@ def init_db():
 init_db()
 
 # ---------------------------
-# PAGE 1: PAPER TRADING
+# PAGE 1: PAPER TRADING (STOCKS)
 # ---------------------------
 def show_paper_trading_page():
-    st.title("📈 AI Paper Trading Engine")
+    st.title("📈 AI Stocks Paper Trading")
     st_autorefresh(interval=120_000, key="auto_refresh")
     state = st.session_state["state"]
     col1, col2 = st.columns(2)
@@ -193,10 +192,10 @@ def show_paper_trading_page():
     st.info(f"Engine Status: {st.session_state.get('engine_status')}")
 
 # ---------------------------
-# PAGE 2: PNL LOG
+# PAGE 2: PNL LOG (STOCKS)
 # ---------------------------
 def show_pnl_page():
-    st.title("📊 PNL Log")
+    st.title("📊 Stocks PNL Log")
     st.write("PNL Data will appear here once trades execute.")
 
 # ---------------------------
@@ -329,12 +328,12 @@ def show_crypto_dashboard_page():
         st.error("Data unavailable.")
 
 # ---------------------------
-# PAGE 5: AI AUTO-PILOT (NEW)
+# PAGE 5: AI AUTO-PILOT (ENHANCED)
 # ---------------------------
 def show_ai_autopilot_page():
     st.title("🚀 AI Auto-Pilot Engine")
     st.caption("Auto-scans the market and trades 24/7 with zero human intervention.")
-    st_autorefresh(interval=15_000, key="autopilot_refresh") # Fast refresh for demo
+    st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
     usd_inr = st.session_state["usd_inr"]
     ap = st.session_state["autopilot"]
@@ -347,11 +346,9 @@ def show_ai_autopilot_page():
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
         
         if c3.button("🚀 Launch AI Engine", type="primary", use_container_width=True):
-            # Initialization Logic
             ap["running"] = True
             ap["currency"] = "USDT" if "USDT" in currency_mode else "INR"
             
-            # Normalize to USD for internal logic if INR selected
             if ap["currency"] == "INR":
                 ap["total_capital"] = capital_input / usd_inr
                 ap["cash_balance"] = capital_input / usd_inr
@@ -369,7 +366,6 @@ def show_ai_autopilot_page():
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
-        # Calc Total Portfolio Value
         open_pos_val = sum([p['qty'] * get_current_price(p['coin']) for p in ap['positions']])
         total_val_usd = ap['cash_balance'] + open_pos_val
         total_pnl_usd = total_val_usd - ap['total_capital']
@@ -383,75 +379,90 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # 2. AI SCANNER LOGIC (Simulated)
-        st.subheader("🧠 AI Decisions Log")
-        
-        # Only scan if we have cash
-        if ap['cash_balance'] > (ap['total_capital'] * 0.1): # Keep 10% reserve
-            # Pick a random coin to "Analyze"
+        # 2. SIMULATED LOGIC
+        if ap['cash_balance'] > (ap['total_capital'] * 0.1): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             cp = get_current_price(scan_coin)
-            
-            # SIMULATED STRATEGY: 
-            # In real life, calculate RSI here. For simulation, we randomly find "opportunities"
-            # approx every 3-4 refreshes
             chance = random.randint(1, 10)
             
-            if chance > 8 and cp > 0: # 20% chance to buy
-                invest_amt = ap['cash_balance'] * 0.2 # Invest 20% of available cash
+            if chance > 8 and cp > 0: 
+                invest_amt = ap['cash_balance'] * 0.2 
                 qty = invest_amt / cp
-                
                 ap['positions'].append({
                     "coin": scan_coin, "entry": cp, "qty": qty, 
                     "time": dt.datetime.now().strftime('%H:%M:%S')
                 })
                 ap['cash_balance'] -= invest_amt
-                ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🟢 BUY SIGNAL: {scan_coin} Oversold. Bought ${invest_amt:.2f} @ ${cp:.2f}")
-            
-            elif chance < 2: # Scanned but no action
-                 ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔍 Scanned {scan_coin}. Market Neutral. Holding.")
+                ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🟢 BUY SIGNAL: {scan_coin}. Bought ${invest_amt:.2f}")
+            elif chance < 2: 
+                 ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔍 Scanned {scan_coin}. Market Neutral.")
         
-        # Check for Exits (Simulated Profit Taking)
-        for i, pos in enumerate(ap['positions']):
-            curr_p = get_current_price(pos['coin'])
-            pnl_pct = ((curr_p - pos['entry']) / pos['entry']) * 100
-            
-            # Simple take profit at 1.5% or random luck in simulation
-            if pnl_pct > 1.5 or (random.randint(1,20) == 20):
-                sale_val = pos['qty'] * curr_p
-                ap['cash_balance'] += sale_val
-                ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 TAKE PROFIT: Sold {pos['coin']} @ ${curr_p:.2f} (+{pnl_pct:.2f}%)")
-                ap['positions'].pop(i)
-                break # Sell one at a time
-
-        # Limit logs
-        if len(ap['logs']) > 10: ap['logs'] = ap['logs'][:10]
-        
-        # Display Logs
+        if len(ap['logs']) > 5: ap['logs'] = ap['logs'][:5]
         for log in ap['logs']:
-            if "BUY" in log: st.markdown(f":green[{log}]")
-            elif "SOLD" in log or "TAKE PROFIT" in log: st.markdown(f":red[{log}]")
-            else: st.text(log)
+            st.text(log)
             
         st.markdown("---")
         
-        # 3. LIVE POSITIONS
-        st.subheader("💼 Managed Portfolio")
+        # 3. LIVE POSITIONS TABLE (MANUAL RENDER for STOP BUTTONS)
+        st.subheader("💼 Auto-Pilot Portfolio")
+        
         if ap['positions']:
-            pos_data = []
-            for p in ap['positions']:
+            # Headers
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1,1.5,1.5,1])
+            c1.markdown("**Asset**")
+            c2.markdown("**Entry**")
+            c3.markdown("**Current**")
+            c4.markdown("**Qty**")
+            c5.markdown("**Invested**")
+            c6.markdown("**Profit/Loss**")
+            c7.markdown("**Action**")
+            st.markdown("<div style='border-bottom:1px solid #ddd; margin-bottom:10px;'></div>", unsafe_allow_html=True)
+
+            # Totals
+            sum_inv = 0.0
+            sum_val = 0.0
+            sum_pnl = 0.0
+
+            # Rows
+            for i, p in enumerate(ap['positions']):
                 cp = get_current_price(p['coin'])
-                val = p['qty'] * cp
-                pnl = val - (p['qty'] * p['entry'])
-                pos_data.append({
-                    "Asset": p['coin'].replace("-USD",""),
-                    "Entry": f"${p['entry']:.2f}",
-                    "Current": f"${cp:.2f}",
-                    "Qty": f"{p['qty']:.4f}",
-                    "Value": f"${val:.2f}",
-                    "PnL": f"${pnl:.2f}"
-                })
-            st.dataframe(pd.DataFrame(pos_data), use_container_width=True)
+                invested = p['qty'] * p['entry']
+                curr_val = p['qty'] * cp
+                pnl = curr_val - invested
+                
+                sum_inv += invested
+                sum_val += curr_val
+                sum_pnl += pnl
+
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,1,1.5,1.5,1])
+                
+                c1.write(p['coin'].replace("-USD",""))
+                c2.write(f"${p['entry']:.2f}")
+                c3.write(f"${cp:.2f}")
+                c4.write(f"{p['qty']:.4f}")
+                c5.write(f"${invested:.2f}")
+                
+                pnl_color = "green" if pnl >= 0 else "red"
+                c6.markdown(f":{pnl_color}[${pnl:.2f}]")
+                
+                # Stop Button
+                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
+                    # Sell immediately
+                    ap['cash_balance'] += curr_val
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M:%S')}] 🔴 MANUAL STOP: Sold {p['coin']} @ ${cp:.2f}")
+                    ap['positions'].pop(i)
+                    st.rerun()
+
+            st.markdown("<div style='border-bottom:1px solid #ddd; margin-top:10px; margin-bottom:10px;'></div>", unsafe_allow_html=True)
+            
+            # FOOTER SUMMARY
+            f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1])
+            f1.write("**PORTFOLIO TOTALS:**")
+            f2.write(f"**${sum_inv:,.2f}**")
+            
+            total_pnl_color = "green" if sum_pnl >= 0 else "red"
+            f3.markdown(f":{total_pnl_color}[**${sum_pnl:,.2f}**]")
+            
         else:
             st.info("AI is scanning for entry points...")
             
@@ -465,10 +476,25 @@ def show_ai_autopilot_page():
 def main():
     apply_custom_style()
     st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
+    
+    # --- NEW SIDEBAR STRUCTURE ---
     st.sidebar.title("Navigation")
-    # Added "AI Auto-Pilot" to navigation
-    page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log", "Crypto Bot", "AI Auto-Pilot", "Crypto Dashboard"])
+    
+    # 1. Asset Class Selector
+    market_type = st.sidebar.radio("Select Market", ["Stocks", "Crypto"], index=1)
+    st.sidebar.markdown("---")
+    
+    page = None
+    
+    if market_type == "Stocks":
+        st.sidebar.subheader("Stocks Menu")
+        page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
+    
+    else: # Crypto
+        st.sidebar.subheader("Crypto Menu")
+        page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Dashboard"])
 
+    # --- THREADS ---
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     
@@ -477,11 +503,12 @@ def main():
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
+    # --- ROUTING ---
     if page == "Paper Trading":
         show_paper_trading_page()
     elif page == "PNL Log":
         show_pnl_page()
-    elif page == "Crypto Bot":
+    elif page == "Crypto Grid Bot":
         show_crypto_bot_page()
     elif page == "AI Auto-Pilot":
         show_ai_autopilot_page()
