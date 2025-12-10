@@ -42,78 +42,47 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* 1. Main Page Background & Global Font Color */
-        .stApp {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
+        /* Global Styles */
+        .stApp { background-color: #ffffff !important; color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* 2. Sidebar Styling (Dark Grey/Black for Sidebar) */
-        section[data-testid="stSidebar"] {
-            background-color: #262730 !important; 
-            color: #ffffff !important;
-        }
-        section[data-testid="stSidebar"] * {
-            color: #ffffff !important;
-        }
-        section[data-testid="stSidebar"] div[role="radiogroup"] label {
-            color: #ffffff !important;
-        }
-
-        /* 3. Force all text elements on Main Page to be black */
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li {
-            color: #000000 !important;
-        }
-
-        /* 4. Metric Boxes - Light Grey Background */
+        /* Sidebar */
+        section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
+        section[data-testid="stSidebar"] * { color: white !important; }
+        
+        /* Metrics & Containers */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important;
             border: 1px solid #d1d5db;
-            color: #000000 !important;
             border-radius: 8px;
+            padding: 10px;
         }
-
-        /* 5. Tables - Light Grey Background & Black Text */
-        div[data-testid="stDataFrame"] {
-            background-color: #f0f2f6 !important;
-            border: 1px solid #d1d5db;
-            border-radius: 5px;
-            padding: 5px;
+        
+        /* Custom Table Header for Bot List */
+        .bot-header {
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
         }
-
-        /* 6. Buttons - Light Grey Background */
+        .bot-row {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+            align-items: center;
+        }
+        
+        /* Buttons */
         .stButton > button {
             background-color: #e5e7eb !important;
-            color: #000000 !important;
+            color: black !important;
             border: 1px solid #9ca3af !important;
         }
         .stButton > button:hover {
             background-color: #d1d5db !important;
-            color: #000000 !important;
-            border-color: #6b7280 !important;
         }
         
-        /* 7. Selectbox (The Box Itself) - Light Grey */
-        div[data-baseweb="select"] > div {
-            background-color: #f0f2f6 !important;
-            color: #000000 !important;
-            border: 1px solid #d1d5db;
-        }
-
-        /* 8. DROPDOWN MENU FIX (The Popup List) - White Background */
-        div[data-baseweb="popover"] {
-            background-color: #ffffff !important;
-        }
-        div[data-baseweb="menu"] {
-            background-color: #ffffff !important;
-        }
-        div[role="option"], li[role="option"] {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
-        div[role="option"]:hover, li[role="option"]:hover {
-            background-color: #f0f2f6 !important;
-        }
+        /* Chart Override */
+        .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -121,8 +90,6 @@ def apply_custom_style():
 # CONFIG
 # ---------------------------
 IST = pytz.timezone("Asia/Kolkata")
-TRADING_START = dt.time(9, 30)
-TRADING_END = dt.time(15, 30)
 START_CAPITAL = 100000.0
 DB_PATH = "paper_trades.db"
 CRYPTO_SYMBOLS_USDT = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
@@ -159,17 +126,13 @@ if "state" not in st.session_state:
         "positions": {},
     }
 
-# Grid Bot Specific State
 if "grid_bot_active" not in st.session_state:
-    st.session_state["grid_bot_active"] = {} # Key: CoinSymbol, Value: Dict of params
+    st.session_state["grid_bot_active"] = {} 
 
 for key in ["engine_status", "engine_running", "loop_started", 
             "crypto_running", "crypto_status", "crypto_loop_started"]:
     if key not in st.session_state:
         st.session_state[key] = False if "running" in key or "started" in key else "Idle"
-
-if "last_top5" not in st.session_state:
-    st.session_state["last_top5"] = []
 
 if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
@@ -209,11 +172,10 @@ def show_pnl_page():
 # ---------------------------
 def show_crypto_bot_page():
     st.title("🤖 AI Grid Trading Bot")
-    st_autorefresh(interval=30_000, key="grid_refresh") # 30s refresh
+    st_autorefresh(interval=30_000, key="grid_refresh") 
 
     # --- A. TOP TABLE (Analysis) ---
     st.subheader("🔎 Live Market Analysis (30s Update)")
-    
     analysis_data = []
     for coin in CRYPTO_SYMBOLS_USDT:
         hist = get_safe_crypto_data(coin, period="5d")
@@ -221,14 +183,10 @@ def show_crypto_bot_page():
             curr = hist['Close'].iloc[-1]
             prev = hist['Close'].iloc[-2]
             change = ((curr - prev) / prev) * 100
-            
-            # Simple AI Logic for Recommendation
             rec = "HOLD"
             if change > 3.0: rec = "SELL (Overbought)"
             elif change < -3.0: rec = "BUY (Oversold)"
-            
             volatility = (hist['High'] - hist['Low']).mean() / curr * 100
-            
             analysis_data.append({
                 "Coin": coin.replace("-USD", ""),
                 "CMP (USDT)": f"${curr:,.2f}",
@@ -246,15 +204,12 @@ def show_crypto_bot_page():
 
     # --- B. GRID CONFIG PANEL ---
     st.subheader("⚙️ Configure Grid Bot")
-    
     c1, c2 = st.columns([1, 2])
-    
     with c1:
         selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USDT)
         curr_price = get_current_price(selected_coin)
         st.metric("Current Price", f"${curr_price:,.2f}")
         
-        # Brain Button Logic
         if st.button("🧠 Auto-Pick Best Settings"):
             if curr_price > 0:
                 st.session_state['auto_lower'] = float(curr_price * 0.95)
@@ -268,7 +223,6 @@ def show_crypto_bot_page():
                 st.error("Wait for price to load.")
 
     with c2:
-        # Inputs (Use session state if auto-pick was clicked)
         col_a, col_b = st.columns(2)
         lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0))
         upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0))
@@ -281,74 +235,103 @@ def show_crypto_bot_page():
         tp_pct = col_e.number_input("Take Profit (%)", value=st.session_state.get('auto_tp', 2.0))
         sl_pct = col_f.number_input("Stop Loss (%)", value=st.session_state.get('auto_sl', 3.0))
 
-    # --- C. ACTION BUTTONS ---
-    btn_col1, btn_col2 = st.columns(2)
-    
-    with btn_col1:
-        if st.button("▶️ Start Grid Bot"):
-            if curr_price > 0 and lower_p < upper_p:
-                bot_id = selected_coin
-                entry_qty = invest / curr_price
-                
-                st.session_state["grid_bot_active"][bot_id] = {
-                    "coin": selected_coin,
-                    "entry_price": curr_price,
-                    "lower": lower_p,
-                    "upper": upper_p,
-                    "grids": grids,
-                    "qty": entry_qty,
-                    "invest": invest,
-                    "tp": tp_pct,
-                    "sl": sl_pct,
-                    "status": "Running",
-                    "start_time": dt.datetime.now().strftime("%H:%M:%S")
-                }
-                st.success(f"Grid Bot Started for {selected_coin}!")
-            else:
-                st.error("Invalid Config or Price unavailable.")
+    if st.button("▶️ Start Grid Bot"):
+        if curr_price > 0 and lower_p < upper_p:
+            bot_id = selected_coin
+            entry_qty = invest / curr_price
+            st.session_state["grid_bot_active"][bot_id] = {
+                "coin": selected_coin,
+                "entry_price": curr_price,
+                "lower": lower_p,
+                "upper": upper_p,
+                "grids": grids,
+                "qty": entry_qty,
+                "invest": invest,
+                "tp": tp_pct,
+                "sl": sl_pct,
+                "status": "Running",
+                "start_time": dt.datetime.now().strftime("%H:%M:%S")
+            }
+            st.success(f"Bot Started for {selected_coin}!")
+        else:
+            st.error("Invalid Config or Price unavailable.")
 
-    with btn_col2:
-        if st.button("⏹ Stop Grid Bot"):
-            if selected_coin in st.session_state["grid_bot_active"]:
-                del st.session_state["grid_bot_active"][selected_coin]
-                st.warning(f"Bot stopped for {selected_coin}")
-
-    # --- D. ACTIVE BOT STATUS TABLE ---
+    # --- C. ACTIVE BOT STATUS TABLE (CUSTOM LAYOUT) ---
+    st.markdown("---")
     st.subheader("📍 Active Grid Bots")
     
     active_bots = st.session_state["grid_bot_active"]
+    
     if active_bots:
-        bot_rows = []
-        for b_id, data in active_bots.items():
-            # Live PNL Calc
+        # 1. Header Row
+        h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 2, 1])
+        h1.markdown("**Coin**")
+        h2.markdown("**Entry**")
+        h3.markdown("**CMP**")
+        h4.markdown("**Inv.**")
+        h5.markdown("**Pres. Val**")
+        h6.markdown("**PnL**")
+        h7.markdown("**Status**")
+        h8.markdown("**Action**")
+        
+        st.markdown("<div style='border-bottom: 1px solid #ccc; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
+        # Totals
+        total_inv = 0.0
+        total_curr = 0.0
+        total_pnl = 0.0
+
+        # 2. Data Rows
+        # Iterate over a list of items to avoid runtime dict change errors
+        for b_id, data in list(active_bots.items()):
             cp = get_current_price(data['coin'])
+            
+            # Calculations
             if cp > 0:
-                pnl = (cp - data['entry_price']) * data['qty']
+                current_val = data['qty'] * cp
+                pnl = current_val - data['invest']
                 pnl_pct = (pnl / data['invest']) * 100
                 
                 # Check TP/SL
-                status = "Running"
-                if pnl_pct >= data['tp']: status = "TAKE PROFIT HIT ✅"
-                elif pnl_pct <= -data['sl']: status = "STOP LOSS HIT ❌"
+                status_text = "🟢 Running"
+                if pnl_pct >= data['tp']: status_text = "✅ TP HIT"
+                elif pnl_pct <= -data['sl']: status_text = "❌ SL HIT"
                 
-                bot_rows.append({
-                    "Coin": data['coin'],
-                    "CMP": f"${cp:,.2f}",
-                    "Entry": f"${data['entry_price']:,.2f}",
-                    "Lower": data['lower'],
-                    "Upper": data['upper'],
-                    "Qty": f"{data['qty']:.4f}",
-                    "Inv.": f"${data['invest']}",
-                    "TP/SL": f"{data['tp']}% / {data['sl']}%",
-                    "PnL (USDT)": f"${pnl:.2f}",
-                    "Status": status,
-                    "Started": data['start_time']
-                })
+                # Add to totals
+                total_inv += data['invest']
+                total_curr += current_val
+                total_pnl += pnl
+                
+                # Render Row
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 2, 1])
+                
+                c1.write(data['coin'].replace("-USD",""))
+                c2.write(f"${data['entry_price']:.2f}")
+                c3.write(f"${cp:.2f}")
+                c4.write(f"${data['invest']:.2f}")
+                c5.write(f"${current_val:.2f}")
+                
+                # Color code PnL
+                pnl_color = "green" if pnl >= 0 else "red"
+                c6.markdown(f":{pnl_color}[${pnl:.2f}]")
+                
+                c7.write(status_text)
+                
+                # Individual Stop Button
+                if c8.button("Stop 🟥", key=f"stop_{b_id}"):
+                    del st.session_state["grid_bot_active"][b_id]
+                    st.rerun()
         
-        st.dataframe(pd.DataFrame(bot_rows), use_container_width=True)
+        st.markdown("<div style='border-bottom: 1px solid #ccc; margin-top: 10px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+        
+        # 3. Summary Footer
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Total Investment", f"${total_inv:,.2f}")
+        f2.metric("Present Value", f"${total_curr:,.2f}")
+        f3.metric("Total PnL", f"${total_pnl:,.2f}", delta_color="normal")
+        
     else:
-        st.info("No Active Grid Bots.")
-
+        st.info("No Active Grid Bots. Configure and start one above.")
 
 # ---------------------------
 # PAGE 4: CRYPTO DASHBOARD
@@ -357,8 +340,7 @@ def show_crypto_dashboard_page():
     st.title("🖥️ Global Crypto Dashboard")
     st_autorefresh(interval=300_000, key="dash_refresh")
 
-    # Sidebar Selection specific to this page
-    dash_coin = st.sidebar.selectbox("Select Asset", ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "ADA-USD"])
+    dash_coin = st.sidebar.selectbox("Select Asset", CRYPTO_SYMBOLS_USDT)
     time_range = st.sidebar.select_slider("Time Range", options=["1mo", "3mo", "6mo", "1y", "5y", "max"])
 
     data = get_safe_crypto_data(dash_coin, period=time_range)
@@ -373,52 +355,38 @@ def show_crypto_dashboard_page():
         m2.metric("24h High", f"${data['High'].iloc[-1]:,.2f}")
         m3.metric("Volume", f"{data['Volume'].iloc[-1]:,.0f}")
         
-        st.subheader(f"Price Chart: {dash_coin}")
-        
-        # Black Chart
         fig = go.Figure(data=[go.Candlestick(x=data.index,
                         open=data['Open'], high=data['High'],
                         low=data['Low'], close=data['Close'])])
         
         fig.update_layout(
-            height=500, 
-            margin=dict(l=0,r=0,t=0,b=0),
-            plot_bgcolor='black',      
-            paper_bgcolor='black',     
+            height=500, margin=dict(l=0,r=0,t=0,b=0),
+            plot_bgcolor='black', paper_bgcolor='black',     
             xaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
             yaxis=dict(showgrid=True, gridcolor='#444444', color='white'), 
             font=dict(color='white')   
         )
         st.plotly_chart(fig, use_container_width=True)
-        
-        with st.expander("📄 View Raw Data"):
-            st.dataframe(data.sort_index(ascending=False).head(50), use_container_width=True)
-
     else:
-        st.error("Data unavailable. Try a different coin or timeframe.")
+        st.error("Data unavailable.")
 
 # ---------------------------
 # MAIN EXECUTION
 # ---------------------------
 def main():
     apply_custom_style()
-    
     st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bitcoin_logo.svg/1200px-Bitcoin_logo.svg.png", width=50)
     st.sidebar.title("Navigation")
-    
     page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log", "Crypto Bot", "Crypto Dashboard"])
 
-    # Threads initialization (Safety Check)
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     
-    # Crypto Loop
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
-    # Page Routing
     if page == "Paper Trading":
         show_paper_trading_page()
     elif page == "PNL Log":
