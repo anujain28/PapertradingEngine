@@ -407,7 +407,6 @@ def show_ai_autopilot_page():
                 ap["cash_balance"] = capital_input
             
             ap["active_grids"] = []
-            # Do NOT reset history here so reports persist
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M:%S')}] Engine Started in {ap['mode']} Mode. Capital: ${ap['total_capital']:.2f}")
             st.rerun()
             
@@ -509,14 +508,13 @@ def show_ai_autopilot_page():
                 c6.markdown(f":{pnl_color}[${pnl:.2f}]")
                 
                 if c7.button("Stop 🟥", key=f"ap_grid_stop_{i}"):
-                    # CLOSE POSITION & CAPTURE IST TIMESTAMP
+                    # CLOSE POSITION
                     ap['cash_balance'] += curr_val
                     
-                    # Capture exact close time in IST
                     close_time_ist = dt.datetime.now(IST)
                     
                     closed_trade = {
-                        "date": close_time_ist, # IST datetime object
+                        "date": close_time_ist,
                         "coin": g['coin'],
                         "invested": g['invest'],
                         "pnl": pnl,
@@ -552,67 +550,88 @@ def show_ai_autopilot_page():
             st.rerun()
 
 # ---------------------------
-# PAGE 6: CRYPTO PNL REPORT (NEW)
+# PAGE 6: CRYPTO PNL REPORT (LIVE + CLOSED)
 # ---------------------------
 def show_crypto_report_page():
     st.title("📑 Crypto PnL Report (Auto-Pilot)")
     ap = st.session_state["autopilot"]
+    usd_inr = st.session_state["usd_inr"]
+    
+    st_autorefresh(interval=30_000, key="report_refresh")
+
+    # --- 1. LIVE RUNNING TRADES SUMMARY (NEW) ---
+    st.subheader("🔴 Live Portfolio Overview (Running Trades)")
+    
+    # Calculate Live Metrics
+    running_invested_usd = sum([g.get('invest', 0.0) for g in ap['active_grids']])
+    running_present_val_usd = 0.0
+    for g in ap['active_grids']:
+         cp = get_current_price(g['coin'])
+         running_present_val_usd += (g['qty'] * cp)
+    running_pnl_usd = running_present_val_usd - running_invested_usd
+    
+    # Convert to INR
+    r_inv_inr = running_invested_usd * usd_inr
+    r_val_inr = running_present_val_usd * usd_inr
+    r_pnl_inr = running_pnl_usd * usd_inr
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Live Invested (INR)", f"₹{r_inv_inr:,.0f}")
+    c2.metric("Live Present Value (INR)", f"₹{r_val_inr:,.0f}")
+    c3.metric("Live Unrealized PnL (INR)", f"₹{r_pnl_inr:,.0f}", delta_color="normal")
+    
+    st.markdown("---")
+
+    # --- 2. CLOSED TRADES REPORT ---
+    st.subheader("🏁 Historical Performance (Closed Trades)")
     
     if not ap["history"]:
-        st.info("No closed trades available yet. Reports will generate once Auto-Pilot grids are closed.")
+        st.info("No closed trades available yet.")
         return
 
     # Convert History to DataFrame
     df = pd.DataFrame(ap["history"])
-    # Date is already a datetime object (IST), perfect for pandas operations
+    df['date'] = pd.to_datetime(df['date'])
     
-    # --- METRICS ---
+    # Metrics
     total_profit = df['pnl'].sum()
-    avg_roi = df['return_pct'].mean()
     win_count = len(df[df['pnl'] > 0])
     total_count = len(df)
     win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
     
-    # Projections
-    # Calculate days active based on unique days in history
-    unique_days = df['date'].dt.date.nunique()
-    daily_avg = total_profit / max(1, unique_days)
-    proj_monthly = daily_avg * 30
-    
-    # METRIC CARDS
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Realized PnL", f"${total_profit:,.2f}")
-    m2.metric("Win Rate", f"{win_rate:.1f}%", f"{win_count}/{total_count}")
-    m3.metric("Avg ROI per Trade", f"{avg_roi:.2f}%")
-    m4.metric("Est. Monthly Return", f"${proj_monthly:,.2f}")
+    # Metric Cards
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Realized PnL (Till Date)", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
+    m2.metric("Win Rate", f"{win_rate:.1f}%")
+    m3.metric("Total Trades Closed", f"{total_count}")
 
     st.markdown("---")
     
     # --- TIME-BASED REPORTS ---
-    c1, c2, c3 = st.tabs(["Daily Report", "Weekly Report", "Monthly Report"])
+    t1, t2, t3 = st.tabs(["Daily Report", "Weekly Report", "Monthly Report"])
     
-    with c1:
+    with t1:
         st.subheader("Daily Profit Log (IST)")
-        # Group by IST Date
         daily_df = df.groupby(df['date'].dt.date)[['invested', 'pnl']].sum().reset_index()
-        daily_df.columns = ['Date', 'Total Invested', 'Net PnL']
+        daily_df['Net PnL (INR)'] = daily_df['pnl'] * usd_inr
         st.dataframe(daily_df, use_container_width=True)
         
-    with c2:
+    with t2:
         st.subheader("Weekly Summary")
         df['Week'] = df['date'].dt.isocalendar().week
         weekly_df = df.groupby('Week')[['invested', 'pnl']].sum().reset_index()
+        weekly_df['Net PnL (INR)'] = weekly_df['pnl'] * usd_inr
         st.dataframe(weekly_df, use_container_width=True)
         
-    with c3:
+    with t3:
         st.subheader("Monthly Overview")
         df['Month'] = df['date'].dt.month_name()
         monthly_df = df.groupby('Month')[['invested', 'pnl']].sum().reset_index()
+        monthly_df['Net PnL (INR)'] = monthly_df['pnl'] * usd_inr
         st.dataframe(monthly_df, use_container_width=True)
         
     st.markdown("---")
     st.subheader("📜 Complete Trade Log")
-    # Format date for display
     display_df = df.copy()
     display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
     st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
@@ -635,7 +654,6 @@ def main():
         page = st.sidebar.radio("Go to", ["Paper Trading", "PNL Log"])
     else: # Crypto
         st.sidebar.subheader("Crypto Menu")
-        # Added Crypto Report to Menu
         page = st.sidebar.radio("Go to", ["Crypto Grid Bot", "AI Auto-Pilot", "Crypto Report"])
         
         st.sidebar.markdown("---")
