@@ -749,11 +749,11 @@ def main():
 
 page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
 
-    if page == "Paper Trading":
+if page == "Paper Trading":
         show_paper_trading_page()
-    elif page == "PNL Log":
+elif page == "PNL Log":
             show_pnl_page()
-    elif page == "Crypto Bot":
+elif page == "Crypto Bot":
         show_crypto_page()
 
 
