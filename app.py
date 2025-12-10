@@ -751,10 +751,9 @@ def main():
 
     if page == "Paper Trading":
         show_paper_trading_page()
-    else:
-        show_pnl_page()
-            elif page == "PNL Log":
-        show_pnl_page()
+    elif page == "PNL Log":
+    show_pnl_page()
+        show_crypto_page()
     elif page == "Crypto Bot":
         show_crypto_page()
 
