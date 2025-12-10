@@ -84,8 +84,11 @@ if "telegram_started" not in st.session_state:
     st.session_state.telegram_started = False
 
 if "report_time" not in st.session_state:
-    # Default daily report time 16:00 IST
-    st.session_state.report_time = dt.time(16, 0)
+    st.session_state.report_time = dt.time(16, 0)  # default 16:00 IST
+
+# store last picked top 5
+if "last_top5" not in st.session_state:
+    st.session_state.last_top5 = []
 
 
 # ---------------------------
@@ -322,6 +325,7 @@ def run_trading_cycle(now: dt.datetime):
         f"Running cycle at {now.strftime('%H:%M:%S')} – fetching top 5 from AI Robots..."
     )
     top5 = fetch_top5_from_airobots()
+    st.session_state.last_top5 = top5  # store for sidebar display
 
     st.session_state.engine_status = (
         f"Updating positions & trailing stops at {now.strftime('%H:%M:%S')}..."
@@ -550,13 +554,21 @@ def sidebar_config():
     st.sidebar.subheader("Engine control")
     col_a, col_b = st.sidebar.columns(2)
     with col_a:
-        if st.button("▶️ Start engine"):
+        if st.sidebar.button("▶️ Start engine"):
             st.session_state.engine_running = True
             st.session_state.engine_status = "Engine started. Waiting for market window."
     with col_b:
-        if st.button("⏹ Stop engine"):
+        if st.sidebar.button("⏹ Stop engine"):
             st.session_state.engine_running = False
             st.session_state.engine_status = "Engine stopped by user."
+
+    # Show last picked top 5
+    st.sidebar.subheader("Last top 5 from AI Robots")
+    if st.session_state.last_top5:
+        top5_df = pd.DataFrame(st.session_state.last_top5)
+        st.sidebar.dataframe(top5_df, use_container_width=True, height=220)
+    else:
+        st.sidebar.info("No scan results yet. Start engine and wait for first cycle.")
 
 
 def main():
