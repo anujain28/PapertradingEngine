@@ -14,6 +14,11 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh  # pip install streamlit-autorefresh
 from telegram.ext import Application
 from nsepython import nse_quote_ltp  # NSEPython for LTP [web:73][web:75]
+from crypto_bot import (
+    init_crypto_state, get_binance_client, crypto_trading_loop,
+    save_binance_config, load_binance_config, get_crypto_positions,
+    get_crypto_trades
+)
 
 # ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
@@ -161,6 +166,9 @@ if "report_time" not in st.session_state:
 # store last picked top 5
 if "last_top5" not in st.session_state:
     st.session_state["last_top5"] = []
+
+# Initialize crypto state
+init_crypto_state()
 
 
 # ---------------------------
@@ -602,6 +610,64 @@ def show_pnl_page():
     st.dataframe(monthly, use_container_width=True)
 
 
+def show_crypto_page():
+    st.title("🤖 Crypto Grid Trading Bot (24/7)")
+    st.info("🟢 Binance Spot Grid Trading - ETH, BTC, SOL, ADA, XRP")
+    
+    # Binance API config
+    with st.expander("⚙️ Binance API Configuration", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            api_key = st.text_input("API Key", type="password", help="Binance API Key")
+        with col2:
+            secret_key = st.text_input("Secret Key", type="password", help="Binance Secret Key")
+        
+        if st.button("Save Binance Credentials"):
+            if api_key and secret_key:
+                save_binance_config(api_key, secret_key)
+                st.success("Binance credentials saved!")
+            else:
+                st.error("Please enter both API Key and Secret Key")
+    
+    # Bot status
+    status = st.session_state.get("crypto_status", "Idle")
+    st.metric("Bot Status", status)
+    
+    # Bot control
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Start 24/7 Trading"):
+            st.session_state["crypto_running"] = True
+            st.session_state["crypto_status"] = "Starting grid trading on 5 coins..."
+            st.success("Crypto bot started! Running 24/7...")
+    with col2:
+        if st.button("⏹ Stop Trading"):
+            st.session_state["crypto_running"] = False
+            st.session_state["crypto_status"] = "Bot stopped"
+            st.warning("Crypto bot stopped.")
+    
+    # Positions
+    st.subheader("📍 Open Grid Positions")
+    positions = get_crypto_positions()
+    if not positions.empty:
+        st.dataframe(positions, use_container_width=True)
+    else:
+        st.info("No active grid positions yet. Start the bot to begin trading.")
+    
+    # Recent trades
+    st.subheader("📊 Recent Grid Orders")
+    trades = get_crypto_trades()
+    if not trades.empty:
+        st.dataframe(trades, use_container_width=True)
+    else:
+        st.info("No trades executed yet.")
+    
+    st.caption(
+        "Grid Trading uses Binance Spot Grid features to automatically place buy/sell orders. "
+        "The bot manages 5 cryptocurrencies (BTC, ETH, SOL, ADA, XRP) simultaneously, "
+        "running 24/7 to capitalize on market volatility with minimal risk."
+    )
+
 def sidebar_config():
     st.sidebar.header("⚙️ Configuration")
 
@@ -672,15 +738,25 @@ def main():
         t.start()
         st.session_state["loop_started"] = True
 
+        # Start crypto trading loop once
+    if not st.session_state.get("crypto_loop_started", False):
+        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        t_crypto.start()
+        st.session_state["crypto_loop_started"] = True
+
     # Start Telegram scheduler once
     start_telegram_scheduler_if_needed()
 
-    page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log"])
+ page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
 
     if page == "Paper Trading":
         show_paper_trading_page()
     else:
         show_pnl_page()
+            elif page == "PNL Log":
+        show_pnl_page()
+    elif page == "Crypto Bot":
+        show_crypto_page()
 
 
 if __name__ == "__main__":
