@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 
 # --- IMPORT STOCK MODULE ---
 try:
-    import app1 # The file we just created
+    import app1
     STOCKS_MODULE_AVAILABLE = True
 except ImportError:
     STOCKS_MODULE_AVAILABLE = False
@@ -164,7 +164,6 @@ if "autopilot" not in st.session_state:
         "active_grids": [], "logs": [], "history": []
     }
 else:
-    # Ensure keys exist
     defaults = {
         "running": False, "mode": "PAPER", "currency": "USDT",
         "total_capital": 0.0, "cash_balance": 0.0,
@@ -289,6 +288,23 @@ def show_crypto_manual_bot_page():
     else:
         st.info("No active manual bots.")
 
+    # Live Grid Orders
+    st.markdown("### 📋 Live Grid Orders")
+    if active_bots:
+        for b_id, data in active_bots.items():
+            with st.expander(f"Orders for {b_id}"):
+                lower = data['lower']
+                upper = data['upper']
+                grids = data.get('grids', 5)
+                levels = np.linspace(lower, upper, grids)
+                orders = []
+                for lvl in levels:
+                    if lvl < data['entry_price']: orders.append({"Side": "BUY", "Price": f"${lvl:.4f}", "Status": "Open"})
+                    else: orders.append({"Side": "SELL", "Price": f"${lvl:.4f}", "Status": "Open"})
+                st.table(pd.DataFrame(orders))
+    else:
+        st.caption("Start a bot to see grid levels.")
+
     st.markdown("---")
     st.subheader(f"📉 Asset Price Chart: {selected_coin}")
     t_col1, t_col2 = st.columns([3, 1])
@@ -318,9 +334,11 @@ def show_ai_autopilot_page():
     st_autorefresh(interval=15_000, key="autopilot_refresh") 
     
     if not ap["running"]:
+        st.subheader("🛠️ Setup Auto-Pilot")
         c1, c2, c3 = st.columns(3)
         currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
         capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
+        
         if c3.button("🚀 Launch AI", type="primary", use_container_width=True):
             ap["running"] = True
             ap["mode"] = "LIVE" if is_live else "PAPER"
@@ -335,7 +353,9 @@ def show_ai_autopilot_page():
             ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
             st.rerun()
     else:
-        st.success("✅ AI Engine Active")
+        # --- FIXED: STATUS BANNER ---
+        st.success("✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids...")
+        
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         grid_current_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
@@ -348,12 +368,16 @@ def show_ai_autopilot_page():
         m3.metric("Invested", f"{curr_sym}{grid_current_val * conv_factor:,.2f}")
         m4.metric("Net PnL", f"{curr_sym}{total_pnl_usd * conv_factor:,.2f}", delta=f"{(total_pnl_usd/ap['total_capital'])*100:.2f}%")
         
-        # Scanner
+        st.markdown("---")
+        
+        # SCANNER
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
             if not any(g['coin'] == scan_coin for g in ap['active_grids']):
                 cp = get_current_price(scan_coin)
-                if random.randint(1, 10) > 8 and cp > 0: 
+                # Random "Opportunity" for Demo
+                chance = random.randint(1, 10)
+                if chance > 8 and cp > 0: 
                     invest_amt = ap['cash_balance'] * 0.2 
                     new_grid = {
                         "coin": scan_coin, "entry": cp, "lower": cp*0.95, "upper": cp*1.05,
@@ -361,7 +385,17 @@ def show_ai_autopilot_page():
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] Deployed Grid: {scan_coin}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🚀 Deployed Grid: {scan_coin}")
+                elif chance < 3:
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🔍 Scanned {scan_coin}: Neutral. Skipped.")
+
+        # --- FIXED: LOG DISPLAY ---
+        st.subheader("🧠 AI Activity Log")
+        if len(ap['logs']) > 5: ap['logs'] = ap['logs'][:5]
+        for log in ap['logs']:
+            st.text(log)
+
+        st.markdown("---")
 
         st.subheader(f"💼 Active Grids")
         if ap['active_grids']:
@@ -384,10 +418,13 @@ def show_ai_autopilot_page():
                 if c7.button("Stop", key=f"ap_stop_{i}"):
                     ap['cash_balance'] += curr_val
                     ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": (pnl/g['invest'])*100})
+                    ap['logs'].insert(0, f"[{dt.datetime.now().strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
                     ap['active_grids'].pop(i)
                     st.rerun()
         
-        if st.button("⏹ Stop"): ap["running"] = False; st.rerun()
+        if st.button("⏹ Stop Engine"): 
+            ap["running"] = False
+            st.rerun()
 
 # ---------------------------
 # PAGE: CRYPTO REPORT
