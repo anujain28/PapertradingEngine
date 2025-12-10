@@ -17,6 +17,9 @@ from telegram.ext import Application
 import yfinance as yf
 import plotly.graph_objects as go
 
+# --- NEW IMPORT FOR THREAD CONTEXT FIX ---
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+
 # --- IMPORT STOCK MODULE ---
 try:
     import app1
@@ -44,7 +47,7 @@ except ImportError:
 # ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
 # ---------------------------
-st.set_page_config(page_title="Paisa Banao Engine", layout="wide", page_icon="💰")
+st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈")
 
 def apply_custom_style():
     st.markdown("""
@@ -57,24 +60,17 @@ def apply_custom_style():
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         
-        /* Sidebar Inputs (Black BG, White Text) */
+        /* --- SIDEBAR INPUTS FIX (Visibility) --- */
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
             caret-color: #ffffff !important;
-            border: 1px solid #666 !important;
+            border: 1px solid #555 !important;
+        }
+        section[data-testid="stSidebar"] div[data-baseweb="input"] {
+            background-color: #000000 !important;
         }
         
-        /* Sidebar Expander */
-        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
-            background-color: #333 !important;
-            color: #ffffff !important;
-            border: 1px solid #555;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stExpander"] div[role="group"] {
-            background-color: #262730 !important;
-        }
-
         /* Metrics & Containers */
         div[data-testid="metric-container"] {
             background-color: #f0f2f6 !important;
@@ -113,23 +109,22 @@ def apply_custom_style():
             color: #000000 !important; 
         }
         
-        /* --- MAIN PAGE EXPANDER & TABLE FIX --- */
-        .main div[data-testid="stExpander"] details summary {
+        /* --- EXPANDER & TABLE FIX --- */
+        div[data-testid="stExpander"] details summary {
             background-color: #f8f9fa !important;
             color: #000000 !important;
             border: 1px solid #dee2e6;
         }
-        .main div[data-testid="stExpander"] div[role="group"] {
+        div[data-testid="stExpander"] div[role="group"] {
             background-color: #ffffff !important;
         }
-        .main div[data-testid="stExpander"] table, 
-        .main div[data-testid="stExpander"] td, 
-        .main div[data-testid="stExpander"] th,
-        .main div[data-testid="stExpander"] div {
+        div[data-testid="stExpander"] table, 
+        div[data-testid="stExpander"] td, 
+        div[data-testid="stExpander"] th {
             color: #000000 !important;
+            background-color: #ffffff !important;
+            border-bottom: 1px solid #eee !important;
         }
-        
-        /* Dataframes */
         div[data-testid="stDataFrame"] {
             background-color: #ffffff !important;
         }
@@ -240,7 +235,37 @@ if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
 
 # ---------------------------
-# PAGE: CRYPTO MANUAL BOT
+# DATABASE
+# ---------------------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, side TEXT, qty INTEGER, price REAL, timestamp TEXT, pnl REAL)""")
+    conn.commit()
+    conn.close()
+init_db()
+
+# ---------------------------
+# PAGE 1: PAPER TRADING (STOCKS)
+# ---------------------------
+def show_paper_trading_page():
+    st.title("📈 AI Stocks Paper Trading")
+    st_autorefresh(interval=120_000, key="auto_refresh")
+    state = st.session_state["state"]
+    col1, col2 = st.columns(2)
+    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
+    col2.metric("Equity", f"₹{state['equity']:,.2f}")
+    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
+
+# ---------------------------
+# PAGE 2: PNL LOG (STOCKS)
+# ---------------------------
+def show_pnl_page():
+    st.title("📊 Stocks PNL Log")
+    st.write("PNL Data will appear here once trades execute.")
+
+# ---------------------------
+# PAGE 3: CRYPTO BOT (GRID TRADING)
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -476,6 +501,7 @@ def show_ai_autopilot_page():
                 pnl = curr_val - g['invest']
                 sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
                 
+                # Regenerate missing orders
                 if 'orders' not in g or not g['orders']:
                     g_levels = np.linspace(g['lower'], g['upper'], 5)
                     new_orders = []
@@ -572,13 +598,6 @@ def show_crypto_report_page():
         st.info("No closed trades.")
 
 # ---------------------------
-# PAGE: PNL LOG (Placeholder)
-# ---------------------------
-def show_pnl_page():
-    st.title("📊 Stocks PNL Log")
-    st.write("This section will display stock trading history.")
-
-# ---------------------------
 # MAIN EXECUTION
 # ---------------------------
 def main():
@@ -588,8 +607,7 @@ def main():
     st.sidebar.title("Navigation")
     
     st.sidebar.subheader("📈 Stocks Menu")
-    # Changed "Paper Trading" to "Bomb Stocks" to match app1.py
-    page_stocks = st.sidebar.radio("Stocks Actions", ["Bomb Stocks", "PNL Log"], label_visibility="collapsed")
+    page_stocks = st.sidebar.radio("Stocks Actions", ["Bomb Stocks", "PNL Log", "Auto-Pilot App"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
@@ -597,6 +615,7 @@ def main():
     
     st.sidebar.markdown("---")
     
+    # 1. Telegram Config
     with st.sidebar.expander("📢 Telegram Alerts"):
         tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
         tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
@@ -605,6 +624,7 @@ def main():
             st.session_state["tg_chat_id"] = tg_chat
             st.success("Saved!")
 
+    # 2. Binance Config
     with st.sidebar.expander("🔌 Binance Keys"):
         api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
         sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
@@ -613,6 +633,7 @@ def main():
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
 
+    # 3. Dhan Config
     with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
         d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
         d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
@@ -621,7 +642,6 @@ def main():
             st.session_state["dhan_token"] = d_token
             st.success("Saved!")
 
-    # State tracking for menu switching
     if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
     if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
     if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
@@ -642,10 +662,13 @@ def main():
         else:
             current_page = page_crypto
 
+    # --- THREADS Fix with Context ---
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        # CRITICAL FIX FOR THREAD CONTEXT WARNING
+        add_script_run_ctx(t_crypto) 
         t_crypto.start()
         st.session_state["crypto_loop_started"] = True
 
