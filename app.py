@@ -331,7 +331,7 @@ def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
                 to_exit.append((sym, ltp))
     for sym, exit_price in to_exit:
         realize_profit(sym, exit_price, now, batch_trades)
-
+            if ltp <= trail_stop and ltp >= pos["entry_price"]:
 
 def rebalance_entries(top5: List[Dict], now: dt.datetime, batch_trades: List[Dict]):
     if not top5:
