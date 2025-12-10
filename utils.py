@@ -17,7 +17,7 @@ def apply_custom_style():
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         
-        /* Sidebar Inputs */
+        /* Sidebar Inputs: Black BG, White Text, White Cursor */
         section[data-testid="stSidebar"] input { 
             background-color: #000000 !important; 
             color: #ffffff !important; 
@@ -33,54 +33,25 @@ def apply_custom_style():
             padding: 10px;
             color: #000000 !important;
         }
-        div[data-testid="metric-container"] label { color: #000000 !important; }
         
-        /* --- DROPDOWN & SELECTBOX FIX (CRITICAL) --- */
-        /* This ensures the selection box itself is white with black text */
-        div[data-baseweb="select"] > div {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-            border: 1px solid #ced4da !important;
-        }
-        /* This ensures the text inside the selection box is black */
-        div[data-baseweb="select"] span {
-            color: #000000 !important;
-        }
-        /* This targets the dropdown popup list */
-        div[data-baseweb="popover"], div[data-baseweb="menu"] {
-            background-color: #ffffff !important;
-        }
-        /* This targets the options inside the list */
-        div[role="option"] {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
-        /* Hover state for options */
-        div[role="option"]:hover {
-            background-color: #f0f2f6 !important;
-        }
+        /* Dropdowns & Popovers (White BG, Black Text) */
+        div[data-baseweb="select"] > div { background-color: #ffffff !important; color: black !important; }
+        div[data-baseweb="popover"], div[data-baseweb="menu"] { background-color: #ffffff !important; }
+        div[role="option"] { background-color: #ffffff !important; color: black !important; }
+        div[role="option"]:hover { background-color: #f0f2f6 !important; }
         
-        /* --- TABLE & EXPANDER FIX --- */
-        div[data-testid="stDataFrame"], div[data-testid="stTable"] {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
-        
-        /* Main Page Expanders (White BG, Black Text) */
+        /* Expander Headers (Main Page) */
         .main div[data-testid="stExpander"] details summary {
-            background-color: #f8f9fa !important;
-            color: #000000 !important;
-            border: 1px solid #dee2e6;
+            background-color: #f8f9fa !important; color: #000000 !important; border: 1px solid #dee2e6;
         }
-        .main div[data-testid="stExpander"] div[role="group"] {
-            background-color: #ffffff !important;
+        .main div[data-testid="stExpander"] div[role="group"] { background-color: #ffffff !important; }
+        .main div[data-testid="stExpander"] table, td, th { color: #000000 !important; }
+        
+        /* Sidebar Expanders (Keep Dark) */
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
+            background-color: #333 !important; color: white !important;
         }
-        .main div[data-testid="stExpander"] p, 
-        .main div[data-testid="stExpander"] span,
-        .main div[data-testid="stExpander"] div {
-            color: #000000 !important;
-        }
-
+        
         /* Buttons */
         .stButton > button {
             background-color: #e5e7eb !important; color: black !important; border: 1px solid #9ca3af !important;
@@ -88,7 +59,35 @@ def apply_custom_style():
         </style>
         """, unsafe_allow_html=True)
 
-# --- TELEGRAM ---
+# --- SIDEBAR CONFIG UI (Crucial Function) ---
+def show_sidebar_config():
+    st.sidebar.markdown("---")
+    
+    with st.sidebar.expander("📢 Telegram Alerts"):
+        t1 = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+        t2 = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
+        if st.button("💾 Save Telegram"):
+            st.session_state["tg_token"] = t1
+            st.session_state["tg_chat_id"] = t2
+            st.success("Saved!")
+
+    with st.sidebar.expander("🔌 Binance Keys"):
+        k1 = st.text_input("API Key", value=st.session_state.get("binance_api", ""), type="password")
+        k2 = st.text_input("Secret Key", value=st.session_state.get("binance_secret", ""), type="password")
+        if st.button("💾 Save Binance"):
+            st.session_state["binance_api"] = k1
+            st.session_state["binance_secret"] = k2
+            st.success("Saved!")
+
+    with st.sidebar.expander("🇮🇳 Dhan Config"):
+        d1 = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
+        d2 = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
+        if st.button("💾 Save Dhan"):
+            st.session_state["dhan_client_id"] = d1
+            st.session_state["dhan_token"] = d2
+            st.success("Saved!")
+
+# --- TELEGRAM HELPER ---
 def send_telegram_alert(message):
     token = st.session_state.get("tg_token")
     chat_id = st.session_state.get("tg_chat_id")
@@ -102,10 +101,8 @@ def send_telegram_alert(message):
 @st.cache_data(ttl=3600)
 def get_usd_inr_rate():
     try:
-        data = yf.Ticker("INR=X").history(period="1d")
-        if not data.empty: return data["Close"].iloc[-1]
-    except: pass
-    return 84.0 
+        return yf.Ticker("INR=X").history(period="1d")["Close"].iloc[-1]
+    except: return 84.0 
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
