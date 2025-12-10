@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh  # pip install streamlit-autorefresh
 from telegram.ext import Application
+from nsepython import nse_quote_ltp  # NEW: NSEPython for LTP
 
 # ---------------------------
 # CONFIG
@@ -164,15 +165,35 @@ def fetch_top5_from_airobots() -> List[Dict]:
         return []
 
 
+def normalize_symbol_for_nse(symbol: str) -> str:
+    """
+    Try to convert incoming symbol to NSEPython-friendly ticker.
+    Adjust this as per your AI Robots symbol format.
+    Examples:
+      'NSE:TCS' -> 'TCS'
+      'TCS-EQ'  -> 'TCS'
+    """
+    s = symbol.strip().upper()
+    if ":" in s:
+        s = s.split(":", 1)[1]
+    if s.endswith("-EQ"):
+        s = s.replace("-EQ", "")
+    return s
+
+
 def get_ltp(symbol: str) -> Optional[float]:
     """
-    TODO: Implement real LTP using your broker / NSE API.
-    For now this dummy version returns None (no trading).
+    Get last traded price from NSE using NSEPython.
+    Assumes symbol is an NSE EQ symbol (e.g. TCS, HDFCBANK).
     """
-    # Example:
-    # url = f"https://your-price-api?symbol={symbol}"
-    # ...
-    return None
+    try:
+        nse_sym = normalize_symbol_for_nse(symbol)
+        ltp = nse_quote_ltp(nse_sym)
+        if ltp is None:
+            return None
+        return float(ltp)
+    except Exception:
+        return None
 
 
 # ---------------------------
