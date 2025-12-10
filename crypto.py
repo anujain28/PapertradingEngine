@@ -135,7 +135,7 @@ def show_crypto_manual_bot_page():
 
     # 4. Active
     st.markdown("---")
-    st.subheader("📍 Active Bots")
+    st.subheader("📍 Active Manual Bots")
     active = st.session_state["grid_bot_active"]
     if active:
         c1,c2,c3,c4,c5,c6 = st.columns(6)
@@ -200,7 +200,7 @@ def show_ai_autopilot_page():
             for i, g in enumerate(ap['active_grids']):
                 cp = get_current_price(g['coin'])
                 val = g['qty'] * cp
-                pnl = val - g['invest']
+                gpnl = val - g['invest']
                 
                 c1,c2,c3,c4,c5,c6,c7,c8 = st.columns([1,1.2,1.2,1.2,1.2,1.2,1.2,0.8])
                 c1.write(g['coin'])
@@ -209,10 +209,10 @@ def show_ai_autopilot_page():
                 c4.write(f"${g['entry']:.4f}")
                 c5.write(f"${g['invest']:.2f}")
                 c6.write(f"${val:.2f}")
-                c7.markdown(f":{'green' if pnl>0 else 'red'}[${pnl:.2f}]")
+                c7.markdown(f":{'green' if gpnl>=0 else 'red'}[${gpnl:.2f}]")
                 if c8.button("Stop", key=f"ap_{i}"):
                     ap['cash_balance'] += val
-                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest']})
+                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": gpnl, "invested": g['invest']})
                     ap['active_grids'].pop(i)
                     st.rerun()
                 
