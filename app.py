@@ -1,4 +1,4 @@
-            # app.py
+# app.py
 import os
 import time
 import threading
@@ -27,63 +27,24 @@ st.set_page_config(page_title="AI Paper Trading", layout="wide")
 
 
 def apply_custom_style():
+    # All fonts black, tables white background, no other custom CSS
     st.markdown(
         """
         <style>
         html, body, [class*="css"]  {
-            font-family: Inter, system-ui, -apple-system, "Segoe UI",
-                         Roboto, "Helvetica Neue", Arial, sans-serif !important;
+            color: #000000 !important;
         }
         .stApp {
-            background-color: #f3f4f6 !important;  /* soft grey */
-            color: #0f172a !important;
+            color: #000000 !important;
         }
-        /* Center main content and control width */
-        div.block-container {
-            max-width: 1100px;
-            padding-top: 1.2rem;
-            padding-bottom: 2rem;
-            margin: 0 auto;
-        }
-        /* Metrics / cards spacing */
-.stMetric {
-    background-color: #ffffff !important;
-    border: 2px solid #e0e7ff !important;
-    border-radius: 10px !important;
-    padding: 16px 20px !important;
-    margin-bottom: 12px !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
-}
-    .stMetric label {
-    font-size: 0.95rem !important;
-    color: #64748b !important;
-    font-weight: 600 !important;
-    margin-bottom: 6px !important;
-}
-    .stMetric [data-testid="stMetricValue"] {
-    font-size: 1.8rem !important;
-    color: #1e293b !important;
-    font-weight: 700 !important;
-}        /* Tables */
         div[data-testid="stDataFrame"] table {
             background-color: #ffffff !important;
-            color: #0f172a !important;
-            border-collapse: collapse !important;
+            color: #000000 !important;
         }
         div[data-testid="stDataFrame"] th,
         div[data-testid="stDataFrame"] td {
-            border-color: #e5e7eb !important;
-            font-size: 0.9rem !important;
-            padding: 6px 10px !important;
-        }
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background-color: #f9fafb !important;
-        }
-        /* Buttons */
-        .stButton>button {
-            border-radius: 8px !important;
-            font-weight: 600 !important;
+            background-color: #ffffff !important;
+            color: #000000 !important;
         }
         </style>
         """,
@@ -350,9 +311,12 @@ def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
         # No loss rule: only exit if ltp >= entry_price
         min_exit_price = max(trail_stop, pos["entry_price"])
         if ltp <= trail_stop and ltp >= pos["entry_price"]:
-                to_exit.append((sym, ltp))
-                for sym, exit_price in to_exit:
-                        realize_profit(sym, exit_price, now, batch_trades)
+            to_exit.append((sym, ltp))
+
+    for sym, exit_price in to_exit:
+        realize_profit(sym, exit_price, now, batch_trades)
+
+
 def rebalance_entries(top5: List[Dict], now: dt.datetime, batch_trades: List[Dict]):
     if not top5:
         return
@@ -668,6 +632,7 @@ def show_crypto_page():
         "running 24/7 to capitalize on market volatility with minimal risk."
     )
 
+
 def sidebar_config():
     st.sidebar.header("⚙️ Configuration")
 
@@ -738,7 +703,7 @@ def main():
         t.start()
         st.session_state["loop_started"] = True
 
-        # Start crypto trading loop once
+    # Start crypto trading loop once
     if not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
         t_crypto.start()
@@ -747,14 +712,15 @@ def main():
     # Start Telegram scheduler once
     start_telegram_scheduler_if_needed()
 
+
 page = st.sidebar.radio("Pages", ["Paper Trading", "PNL Log", "Crypto Bot"])
 
 if page == "Paper Trading":
-        show_paper_trading_page()
+    show_paper_trading_page()
 elif page == "PNL Log":
-            show_pnl_page()
+    show_pnl_page()
 elif page == "Crypto Bot":
-        show_crypto_page()
+    show_crypto_page()
 
 
 if __name__ == "__main__":
