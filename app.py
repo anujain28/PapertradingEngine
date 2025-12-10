@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh  # pip install streamlit-autorefresh
 from telegram.ext import Application
-from nsepython import nse_quote_ltp  # NEW: NSEPython for LTP
+from nsepython import nse_quote_ltp  # NSEPython for LTP [web:73][web:75]
 
 # ---------------------------
 # CONFIG
@@ -66,30 +66,30 @@ TELEGRAM_TOKEN, TELEGRAM_CHAT_ID = load_telegram_config()
 # GLOBAL STATE (IN MEMORY)
 # ---------------------------
 if "state" not in st.session_state:
-    st.session_state.state = {
+    st.session_state["state"] = {
         "capital": START_CAPITAL,
         "equity": START_CAPITAL,
         "positions": {},   # symbol -> position dict
     }
 
 if "engine_status" not in st.session_state:
-    st.session_state.engine_status = "Idle"
+    st.session_state["engine_status"] = "Idle"
 
 if "engine_running" not in st.session_state:
-    st.session_state.engine_running = False
+    st.session_state["engine_running"] = False
 
 if "loop_started" not in st.session_state:
-    st.session_state.loop_started = False
+    st.session_state["loop_started"] = False
 
 if "telegram_started" not in st.session_state:
-    st.session_state.telegram_started = False
+    st.session_state["telegram_started"] = False
 
 if "report_time" not in st.session_state:
-    st.session_state.report_time = dt.time(16, 0)  # default 16:00 IST
+    st.session_state["report_time"] = dt.time(16, 0)  # default 16:00 IST
 
 # store last picked top 5
 if "last_top5" not in st.session_state:
-    st.session_state.last_top5 = []
+    st.session_state["last_top5"] = []
 
 
 # ---------------------------
@@ -167,7 +167,7 @@ def fetch_top5_from_airobots() -> List[Dict]:
 
 def normalize_symbol_for_nse(symbol: str) -> str:
     """
-    Try to convert incoming symbol to NSEPython-friendly ticker.
+    Convert incoming symbol to NSEPython-friendly ticker.
     Adjust this as per your AI Robots symbol format.
     Examples:
       'NSE:TCS' -> 'TCS'
@@ -184,7 +184,7 @@ def normalize_symbol_for_nse(symbol: str) -> str:
 def get_ltp(symbol: str) -> Optional[float]:
     """
     Get last traded price from NSE using NSEPython.
-    Assumes symbol is an NSE EQ symbol (e.g. TCS, HDFCBANK).
+    Assumes symbol is an NSE EQ symbol (e.g. TCS, HDFCBANK). [web:71][web:73]
     """
     try:
         nse_sym = normalize_symbol_for_nse(symbol)
@@ -200,7 +200,7 @@ def get_ltp(symbol: str) -> Optional[float]:
 # TRADING ENGINE
 # ---------------------------
 def recompute_equity():
-    state = st.session_state.state
+    state = st.session_state["state"]
     mtm = 0.0
     for pos in state["positions"].values():
         mtm += pos["qty"] * pos["last_price"]
@@ -217,7 +217,7 @@ def persist_trades(trades: List[Dict]):
 
 
 def persist_equity_snapshot(now: dt.datetime):
-    state = st.session_state.state
+    state = st.session_state["state"]
     conn = sqlite3.connect(DB_PATH)
     row = {
         "date": now.date().isoformat(),
@@ -230,7 +230,7 @@ def persist_equity_snapshot(now: dt.datetime):
 
 
 def realize_profit(symbol: str, exit_price: float, now: dt.datetime, batch_trades: List[Dict]):
-    state = st.session_state.state
+    state = st.session_state["state"]
     if symbol not in state["positions"]:
         return
     pos = state["positions"][symbol]
@@ -253,7 +253,7 @@ def realize_profit(symbol: str, exit_price: float, now: dt.datetime, batch_trade
 
 
 def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
-    state = st.session_state.state
+    state = st.session_state["state"]
     to_exit = []
 
     for sym, pos in list(state["positions"].items()):
@@ -280,7 +280,7 @@ def update_positions_and_trails(now: dt.datetime, batch_trades: List[Dict]):
 def rebalance_entries(top5: List[Dict], now: dt.datetime, batch_trades: List[Dict]):
     if not top5:
         return
-    state = st.session_state.state
+    state = st.session_state["state"]
     usable_capital = START_CAPITAL * MAX_UTILIZATION
     invested_value = sum(p["qty"] * p["last_price"] for p in state["positions"].values())
     available_for_new = max(0.0, usable_capital - invested_value)
@@ -342,18 +342,18 @@ def run_trading_cycle(now: dt.datetime):
     """
     batch_trades: List[Dict] = []
 
-    st.session_state.engine_status = (
+    st.session_state["engine_status"] = (
         f"Running cycle at {now.strftime('%H:%M:%S')} – fetching top 5 from AI Robots..."
     )
     top5 = fetch_top5_from_airobots()
-    st.session_state.last_top5 = top5  # store for sidebar display
+    st.session_state["last_top5"] = top5  # store for sidebar display
 
-    st.session_state.engine_status = (
+    st.session_state["engine_status"] = (
         f"Updating positions & trailing stops at {now.strftime('%H:%M:%S')}..."
     )
     update_positions_and_trails(now, batch_trades)
 
-    st.session_state.engine_status = (
+    st.session_state["engine_status"] = (
         f"Evaluating new entries for {len(top5)} candidates..."
     )
     rebalance_entries(top5, now, batch_trades)
@@ -361,17 +361,19 @@ def run_trading_cycle(now: dt.datetime):
     recompute_equity()
     persist_trades(batch_trades)
     persist_equity_snapshot(now)
-    st.session_state.engine_status = "Cycle complete. Waiting for next run."
+    st.session_state["engine_status"] = "Cycle complete. Waiting for next run."
 
 
 def trading_loop():
     """
     Background loop; respects engine_running flag.
     Runs only on weekdays between 9:30 and 15:30 IST.
+    Uses .get() to avoid AttributeError if keys not initialized. [web:61][web:69]
     """
     while True:
-        if not st.session_state.engine_running:
-            st.session_state.engine_status = "Engine stopped."
+        engine_running = st.session_state.get("engine_running", False)
+        if not engine_running:
+            st.session_state["engine_status"] = "Engine stopped."
             time.sleep(2)
             continue
 
@@ -379,7 +381,7 @@ def trading_loop():
         if now.weekday() < 5 and TRADING_START <= now.time() <= TRADING_END:
             run_trading_cycle(now)
         else:
-            st.session_state.engine_status = (
+            st.session_state["engine_status"] = (
                 "Engine running but outside market hours (9:30–15:30 IST)."
             )
         time.sleep(120)
@@ -437,7 +439,7 @@ def get_today_pnl(daily_df: pd.DataFrame) -> float:
 async def send_telegram_report(context):
     daily, weekly, monthly = load_pnl_frames()
     today_pnl = get_today_pnl(daily)
-    equity = st.session_state.state["equity"]
+    equity = st.session_state["state"]["equity"]
     msg = (
         f"Paper Trading Report\n"
         f"Date: {dt.datetime.now(IST).date().isoformat()}\n"
@@ -451,7 +453,7 @@ async def _start_telegram_jobs():
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    rt = st.session_state.report_time
+    rt = st.session_state["report_time"]
     app.job_queue.run_daily(
         send_telegram_report,
         time=dt.time(rt.hour, rt.minute, tzinfo=IST),
@@ -463,7 +465,7 @@ async def _start_telegram_jobs():
 
 
 def start_telegram_scheduler_if_needed():
-    if st.session_state.telegram_started:
+    if st.session_state.get("telegram_started", False):
         return
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -473,7 +475,7 @@ def start_telegram_scheduler_if_needed():
         asyncio.run(_start_telegram_jobs())
 
     threading.Thread(target=runner, daemon=True).start()
-    st.session_state.telegram_started = True
+    st.session_state["telegram_started"] = True
 
 
 # ---------------------------
@@ -486,7 +488,7 @@ def show_paper_trading_page():
     st_autorefresh(interval=120_000, key="auto_refresh")
 
     # Engine status banner
-    status = st.session_state.engine_status
+    status = st.session_state.get("engine_status", "Idle")
     if status.lower().startswith("running"):
         st.info(f"🟢 Engine status: {status}")
     elif "stopped" in status.lower():
@@ -494,7 +496,7 @@ def show_paper_trading_page():
     else:
         st.info(f"ℹ️ Engine status: {status}")
 
-    state = st.session_state.state
+    state = st.session_state["state"]
 
     col1, col2 = st.columns(2)
     with col1:
@@ -557,12 +559,12 @@ def sidebar_config():
     # Report time
     report_time_str = st.sidebar.text_input(
         "Telegram report time (HH:MM, IST)",
-        value=f"{st.session_state.report_time.hour:02d}:{st.session_state.report_time.minute:02d}",
+        value=f"{st.session_state['report_time'].hour:02d}:{st.session_state['report_time'].minute:02d}",
     )
     try:
         hh, mm = report_time_str.split(":")
         hh, mm = int(hh), int(mm)
-        st.session_state.report_time = dt.time(hh, mm)
+        st.session_state["report_time"] = dt.time(hh, mm)
     except Exception:
         st.sidebar.warning("Invalid time format. Use HH:MM (e.g. 16:00).")
 
@@ -576,17 +578,17 @@ def sidebar_config():
     col_a, col_b = st.sidebar.columns(2)
     with col_a:
         if st.sidebar.button("▶️ Start engine"):
-            st.session_state.engine_running = True
-            st.session_state.engine_status = "Engine started. Waiting for market window."
+            st.session_state["engine_running"] = True
+            st.session_state["engine_status"] = "Engine started. Waiting for market window."
     with col_b:
         if st.sidebar.button("⏹ Stop engine"):
-            st.session_state.engine_running = False
-            st.session_state.engine_status = "Engine stopped by user."
+            st.session_state["engine_running"] = False
+            st.session_state["engine_status"] = "Engine stopped by user."
 
     # Show last picked top 5
     st.sidebar.subheader("Last top 5 from AI Robots")
-    if st.session_state.last_top5:
-        top5_df = pd.DataFrame(st.session_state.last_top5)
+    if st.session_state["last_top5"]:
+        top5_df = pd.DataFrame(st.session_state["last_top5"])
         st.sidebar.dataframe(top5_df, use_container_width=True, height=220)
     else:
         st.sidebar.info("No scan results yet. Start engine and wait for first cycle.")
@@ -597,10 +599,10 @@ def main():
     sidebar_config()
 
     # Start engine loop once
-    if not st.session_state.loop_started:
+    if not st.session_state.get("loop_started", False):
         t = threading.Thread(target=trading_loop, daemon=True)
         t.start()
-        st.session_state.loop_started = True
+        st.session_state["loop_started"] = True
 
     # Start Telegram scheduler once
     start_telegram_scheduler_if_needed()
