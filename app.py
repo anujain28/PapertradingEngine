@@ -34,11 +34,6 @@ except ImportError:
     CRYPTO_BOT_AVAILABLE = False
 
 # ---------------------------
-# HARDCODED CONFIG
-# ---------------------------
-HARDCODED_GEMINI_KEY = "AIzaSyC-JuxWDEu4L5oOG0n_d4riO9xhHguqekQ"
-
-# ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
 # ---------------------------
 st.set_page_config(page_title="AI Crypto Trading", layout="wide", page_icon="📈")
@@ -64,6 +59,7 @@ def apply_custom_style():
         section[data-testid="stSidebar"] label { color: #ffffff !important; }
         
         /* --- EXPANDER & TABLE FIXES (WHITE THEME) --- */
+        /* Force Expander Header to be Light Grey */
         .main div[data-testid="stExpander"] details summary {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
@@ -84,6 +80,17 @@ def apply_custom_style():
         .main div[data-testid="stExpander"] td {
             color: #000000 !important;
             background-color: #ffffff !important;
+        }
+        
+        /* --- DROPDOWN MENU FIX --- */
+        div[data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+            border: 1px solid #ced4da;
+        }
+        div[data-baseweb="popover"], div[data-baseweb="menu"], div[role="option"] {
+            background-color: #ffffff !important;
+            color: #000000 !important;
         }
         
         /* Metrics */
@@ -144,45 +151,14 @@ def get_usd_inr_rate():
     return 84.0 
 
 # ---------------------------
-# 🧠 GEMINI 3 INTELLIGENT ENGINE (RESTRICTED)
+# 🧠 GEMINI 3 INTELLIGENT ENGINE
 # ---------------------------
-def check_gemini_eligibility():
-    """
-    Checks if Gemini API can be used (Limit: Once every 3 days).
-    """
-    last_use_str = st.session_state.get("last_gemini_usage", None)
-    
-    if last_use_str is None:
-        return True # First time use is allowed
-    
-    try:
-        last_use = dt.datetime.strptime(last_use_str, "%Y-%m-%d %H:%M:%S")
-        time_diff = dt.datetime.now() - last_use
-        if time_diff.days >= 3:
-            return True
-        return False
-    except:
-        return True # Fail-safe to allow if date parsing err
-
 def gemini3_analysis(symbol, api_key):
     """
-    Uses Google Gemini to analyze market data.
-    RESTRICTION: Only calls API if eligibility check passes.
+    Uses Google Gemini to analyze market data and output a trading decision.
     """
-    # Use Hardcoded key if API key is missing
-    if not api_key: 
-        api_key = HARDCODED_GEMINI_KEY
-
-    # 1. Check Availability
-    if not GEMINI_AVAILABLE:
-        return calculate_technical_score(symbol)
-
-    # 2. Check Time Restriction (Once every 3 days)
-    is_eligible = check_gemini_eligibility()
-
-    if not is_eligible:
-        # Fallback silently if restricted
-        return calculate_technical_score(symbol)
+    if not GEMINI_AVAILABLE or not api_key:
+        return calculate_technical_score(symbol) # Fallback
 
     try:
         # 1. Fetch Data
@@ -210,10 +186,6 @@ def gemini3_analysis(symbol, api_key):
         # 4. Parse
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
-        
-        # 5. Update Usage Timestamp ONLY on success
-        st.session_state["last_gemini_usage"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         return int(data.get("score", 0)), 50, f"Gemini: {data.get('reason', 'Analysis')}"
         
     except Exception as e:
@@ -221,7 +193,7 @@ def gemini3_analysis(symbol, api_key):
         return calculate_technical_score(symbol) # Fallback on error
 
 def calculate_technical_score(symbol):
-    """Fallback Standard Algo (Always Available)"""
+    """Fallback Standard Algo"""
     try:
         data = yf.Ticker(symbol).history(period="1mo", interval="1d")
         if data is None or len(data) < 26: return 0, 0, "Insufficient Data"
@@ -272,13 +244,7 @@ if "autopilot" not in st.session_state:
         "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
     }
 
-# Init keys (Hardcode Gemini Default)
-if "gemini_api_key" not in st.session_state: 
-    st.session_state["gemini_api_key"] = HARDCODED_GEMINI_KEY
-if "last_gemini_usage" not in st.session_state:
-    st.session_state["last_gemini_usage"] = None
-
-keys_to_init = ["binance_api", "binance_secret", "tg_token", "tg_chat_id"]
+keys_to_init = ["binance_api", "binance_secret", "tg_token", "tg_chat_id", "gemini_api_key"]
 for key in keys_to_init:
     if key not in st.session_state: st.session_state[key] = ""
 
@@ -297,7 +263,7 @@ def init_db():
 init_db()
 
 # ---------------------------
-# PAGE: MANUAL BOT
+# PAGE: MANUAL BOT (Restored)
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -356,7 +322,7 @@ def show_crypto_manual_bot_page():
         tp_pct = col_e.number_input("TP (%)", value=st.session_state.get('auto_tp', 2.0))
         sl_pct = col_f.number_input("SL (%)", value=st.session_state.get('auto_sl', 3.0))
 
-    if st.button("▶️ Start Manual Bot"):
+    if st.button("▶ Start Manual Bot"):
         if curr_price > 0 and lower_p < upper_p:
             bot_id = selected_coin
             entry_qty = invest / curr_price
@@ -426,7 +392,7 @@ def show_crypto_manual_bot_page():
         st.error("Chart data unavailable.")
 
 # ---------------------------
-# PAGE: REPORT
+# PAGE: REPORT (Restored)
 # ---------------------------
 def show_crypto_report_page():
     st.title("📑 Crypto PnL Report")
@@ -478,13 +444,8 @@ def show_ai_autopilot_page():
     st.title(f"🚀 AI Auto-Pilot")
     
     # Engine Status Label
-    is_gemini_restricted = not check_gemini_eligibility()
-    if gemini_key and not is_gemini_restricted:
-        st.caption("✨ Powered by Gemini 3 Intelligent Engine")
-    elif is_gemini_restricted:
-        st.caption("⚙️ Gemini Engine Cooldown (Running Technical Backup)")
-    else:
-        st.caption("⚙️ Running on Standard Technical Engine")
+    if gemini_key: st.caption("✨ Powered by Gemini 3 Intelligent Engine")
+    else: st.caption("⚙️ Running on Standard Technical Engine")
 
     st_autorefresh(interval=20_000, key="autopilot_refresh") 
     
@@ -542,7 +503,7 @@ def show_ai_autopilot_page():
             pnl = curr_val - g['invest']
             pnl_pct = (pnl / g['invest']) * 100
             
-            # Use Gemini or Standard (Managed by function logic)
+            # Use Gemini or Standard
             score, _, reason = gemini3_analysis(g['coin'], gemini_key)
             
             close_trade = False
@@ -572,8 +533,145 @@ def show_ai_autopilot_page():
             for coin in CRYPTO_SYMBOLS_USD:
                 if any(g['coin'] == coin for g in ap['active_grids']): continue
                 
-                # Analyze with Gemini 3 (Managed by function logic)
+                # Analyze with Gemini 3
                 score, _, reason = gemini3_analysis(coin, gemini_key)
                 
                 if score > best_score:
-                    best_score = score; best_coin = coin; best_
+                    best_score = score; best_coin = coin; best_reason = reason
+            
+            if best_coin and best_score >= 5:
+                cp = get_current_price(best_coin)
+                if cp > 0:
+                    alloc = 0.4 if best_score >= 8 else 0.2
+                    invest_amt = min(ap['cash_balance'] * alloc, ap['cash_balance'] * 0.5)
+
+                    lower = cp * 0.95; upper = cp * 1.05
+                    tp_t = 3.0 if best_score >= 8 else 1.5; sl_t = 2.0
+                    
+                    grid_orders = []
+                    for lvl in np.linspace(lower, upper, 5):
+                        if lvl < cp: grid_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
+                        else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
+
+                    new_grid = {
+                        "coin": best_coin, "entry": cp, 
+                        "lower": lower, "upper": upper,
+                        "qty": invest_amt/cp, "invest": invest_amt, 
+                        "grids": 5, "tp": tp_t, "sl": sl_t,
+                        "orders": grid_orders,
+                        "ai_reason": best_reason,
+                        "expected_profit": invest_amt * (tp_t/100),
+                        "expected_loss": invest_amt * (sl_t/100)
+                    }
+                    ap['active_grids'].append(new_grid)
+                    ap['cash_balance'] -= invest_amt
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🤖 AI BUY {best_coin}: {best_reason}")
+                    
+                    inv_inr = invest_amt * usd_inr
+                    msg = (f"🚀 *AI Trade Started*\nAsset: {best_coin}\nEngine: {'Gemini 3' if gemini_key else 'Standard'}\nReason: {best_reason}\n💰 Invested: ${invest_amt:.0f} (₹{inv_inr:,.0f})")
+                    send_telegram_alert(msg)
+
+        # ==========================================
+        # 3. REPORTING
+        # ==========================================
+        now = dt.datetime.now()
+        last_update = ap.get('last_tg_update', now)
+        if isinstance(last_update, str): last_update = pd.to_datetime(last_update)
+        
+        if (now - last_update).total_seconds() > 14400 and ap['active_grids']:
+             msg_lines = ["📊 *Periodic AI Report*"]
+             for g in ap['active_grids']:
+                  curr_pnl = (g['qty'] * get_current_price(g['coin'])) - g['invest']
+                  msg_lines.append(f"• {g['coin']}: ${curr_pnl:.2f}")
+             send_telegram_alert("\n".join(msg_lines))
+             ap['last_tg_update'] = now
+
+        # ==========================================
+        # UI DISPLAY
+        # ==========================================
+        st.subheader("🧠 AI Activity Log")
+        for log in ap['logs'][:5]: st.text(log)
+        st.markdown("---")
+
+        st.subheader(f"💼 Active AI Trades")
+        if ap['active_grids']:
+            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1, 1, 1, 0.8])
+            c1.markdown("**Asset**"); c2.markdown("**Score/Reason**"); 
+            c3.markdown("**Invested**"); c4.markdown("**Exp. Profit**"); c5.markdown("**Exp. Loss**"); 
+            c6.markdown("**Current Val**"); c7.markdown("**PnL**"); c8.markdown("**Action**")
+            
+            for i, g in enumerate(ap['active_grids']):
+                cp = get_current_price(g['coin'])
+                curr_val = g['qty'] * cp
+                pnl = curr_val - g['invest']
+                
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1, 1, 1, 0.8])
+                c1.write(g['coin'].replace("-USD",""))
+                c2.caption(f"{g.get('ai_reason','Auto')[:15]}...")
+                c3.write(f"${g['invest']:.2f}")
+                c4.markdown(f":green[+${g.get('expected_profit', 0):.2f}]")
+                c5.markdown(f":red[-${g.get('expected_loss', 0):.2f}]")
+                c6.write(f"${curr_val:.2f}")
+                c7.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
+                
+                if c8.button("Stop 🟥", key=f"stop_{i}"):
+                    ap['cash_balance'] += curr_val
+                    ap['active_grids'].pop(i)
+                    st.rerun()
+
+            st.markdown("---")
+            st.markdown("### 📋 AI Grid Orders")
+            for g in ap['active_grids']:
+                with st.expander(f"Orders for {g['coin'].replace('-USD','')} (Click to View)"):
+                    if 'orders' in g and g['orders']:
+                        ord_df = pd.DataFrame(g['orders'])
+                        ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
+                        # Table is now styled WHITE in CSS
+                        st.dataframe(ord_df, use_container_width=True)
+                    else:
+                        st.write("Generating orders...")
+        else:
+            st.info("AI Scanner Active: Waiting for optimal setup...")
+        
+        if st.button("⏹ Stop AI Engine"): 
+            ap["running"] = False
+            st.rerun()
+
+# ---------------------------
+# MAIN EXECUTION
+# ---------------------------
+def main():
+    apply_custom_style()
+    st.sidebar.title("💰 Paisa Banao")
+    st.sidebar.title("Navigation")
+    
+    current_page = st.sidebar.radio("Menu", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    st.sidebar.markdown("---")
+    
+    with st.sidebar.expander("🤖 Gemini AI Config"):
+        gemini_key = st.text_input("Gemini API Key", value=st.session_state.get("gemini_api_key", ""), type="password")
+        if st.button("Save API Key"):
+            st.session_state["gemini_api_key"] = gemini_key
+            st.success("Saved!")
+
+    with st.sidebar.expander("📢 Telegram Alerts"):
+        tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+        tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
+        if st.button("Save Telegram"):
+            st.session_state["tg_token"] = tg_token
+            st.session_state["tg_chat_id"] = tg_chat
+            st.success("Saved!")
+
+    if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
+        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        t_crypto.start()
+        st.session_state["crypto_loop_started"] = True
+
+    if current_page == "AI Auto-Pilot": show_ai_autopilot_page()
+    elif current_page == "Crypto Report": show_crypto_report_page()
+    elif current_page == "Manual Bot": show_crypto_manual_bot_page()
+
+if __name__ == "__main__":
+    main()
+
+
