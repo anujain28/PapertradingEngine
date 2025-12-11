@@ -36,6 +36,7 @@ except ImportError:
 # ---------------------------
 # HARDCODED CONFIG
 # ---------------------------
+# Key is stored here but NOT shown in the UI
 HARDCODED_GEMINI_KEY = "AIzaSyC-JuxWDEu4L5oOG0n_d4riO9xhHguqekQ"
 
 # ---------------------------
@@ -156,9 +157,12 @@ def check_gemini_eligibility():
         return False
     except: return True
 
-def gemini3_analysis(symbol, api_key):
+def gemini3_analysis(symbol):
     """Uses Google Gemini to analyze market data."""
-    if not api_key: api_key = HARDCODED_GEMINI_KEY
+    # Use Session Key if exists, else Hardcoded
+    api_key = st.session_state.get("gemini_api_key", HARDCODED_GEMINI_KEY)
+    
+    if not api_key: return calculate_technical_score(symbol)
     if not GEMINI_AVAILABLE: return calculate_technical_score(symbol)
     if not check_gemini_eligibility(): return calculate_technical_score(symbol)
 
@@ -241,8 +245,11 @@ if "autopilot" not in st.session_state:
         "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
     }
 
+# Ensure keys are init
 if "gemini_api_key" not in st.session_state: 
+    # Store hardcoded key initially
     st.session_state["gemini_api_key"] = HARDCODED_GEMINI_KEY
+
 if "last_gemini_usage" not in st.session_state:
     st.session_state["last_gemini_usage"] = None
 
@@ -441,18 +448,17 @@ def show_crypto_report_page():
 def show_ai_autopilot_page():
     usd_inr = st.session_state["usd_inr"]
     ap = st.session_state["autopilot"]
-    gemini_key = st.session_state.get("gemini_api_key")
     
     st.title(f"🚀 AI Auto-Pilot")
     
-    # Engine Status Label
-    is_gemini_restricted = not check_gemini_eligibility()
-    if gemini_key and not is_gemini_restricted:
+    # Check Eligibility
+    gemini_active = check_gemini_eligibility()
+    if gemini_active and HARDCODED_GEMINI_KEY:
         st.caption("✨ Powered by Gemini 3 Intelligent Engine")
-    elif is_gemini_restricted:
-        st.caption("⚙️ Gemini Engine Cooldown (Running Technical Backup)")
+    elif not gemini_active:
+        st.caption("⚙️ Gemini Cooldown Active (Technical Backup)")
     else:
-        st.caption("⚙️ Running on Standard Technical Engine")
+        st.caption("⚙️ Standard Technical Engine")
 
     st_autorefresh(interval=20_000, key="autopilot_refresh") 
     
@@ -511,7 +517,7 @@ def show_ai_autopilot_page():
             pnl_pct = (pnl / g['invest']) * 100
             
             # Use Gemini or Standard (Managed by function logic)
-            score, _, reason = gemini3_analysis(g['coin'], gemini_key)
+            score, _, reason = gemini3_analysis(g['coin'])
             
             close_trade = False
             close_reason = ""
@@ -532,7 +538,7 @@ def show_ai_autopilot_page():
                 ap['active_grids'].pop(i)
         
         # ==========================================
-        # 2. AI JUDGE: ENTRY LOGIC (INTELLIGENT ALGO UPGRADE)
+        # 2. AI JUDGE: ENTRY LOGIC (INTELLIGENT ALGO)
         # ==========================================
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             best_score = -100; best_coin = None; best_reason = ""
@@ -540,9 +546,7 @@ def show_ai_autopilot_page():
             for coin in CRYPTO_SYMBOLS_USD:
                 if any(g['coin'] == coin for g in ap['active_grids']): continue
                 
-                # Analyze with Gemini 3 (Managed by function logic)
-                score, _, reason = gemini3_analysis(coin, gemini_key)
-                
+                score, _, reason = gemini3_analysis(coin)
                 if score > best_score:
                     best_score = score; best_coin = coin; best_reason = reason
             
@@ -553,28 +557,21 @@ def show_ai_autopilot_page():
                     alloc = 0.4 if best_score >= 8 else 0.2
                     invest_amt = min(ap['cash_balance'] * alloc, ap['cash_balance'] * 0.5)
                     
-                    # 2. SMART VOLATILITY CHECK
-                    # Calculate volatilty to set ranges dynamically
+                    # 2. SMART VOLATILITY
                     hist = get_safe_crypto_data(best_coin, period="5d")
-                    volatility_pct = 0.05 # Default 5%
+                    volatility_pct = 0.05
                     if hist is not None:
-                         # Avg daily range
                          volatility_pct = ((hist['High'] - hist['Low']) / hist['Close']).mean()
-                         # Buffer volatility (x1.5 safety)
                          volatility_pct = max(0.03, volatility_pct * 1.5)
 
-                    # 3. SMART GRID SETTINGS
                     lower = cp * (1 - volatility_pct)
                     upper = cp * (1 + volatility_pct)
+                    tp_t = round(volatility_pct * 100 * 0.8, 2)
+                    sl_t = round(volatility_pct * 100 * 0.5, 2)
                     
-                    # TP/SL based on range
-                    tp_t = round(volatility_pct * 100 * 0.8, 2) # Target 80% of range
-                    sl_t = round(volatility_pct * 100 * 0.5, 2) # Stop at 50% of range
-                    
-                    # 4. SMART GRID COUNT
-                    # Ensure minimum ~$15 per grid line for safety
+                    # 3. SMART GRID COUNT
                     safe_grid_count = int(invest_amt / 15)
-                    grid_count = max(3, min(10, safe_grid_count)) # Between 3 and 10 grids
+                    grid_count = max(3, min(10, safe_grid_count))
 
                     grid_orders = []
                     for lvl in np.linspace(lower, upper, grid_count):
@@ -596,7 +593,7 @@ def show_ai_autopilot_page():
                     ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🤖 AI BUY {best_coin}: {best_reason}")
                     
                     inv_inr = invest_amt * usd_inr
-                    msg = (f"🚀 *AI Trade Started*\nAsset: {best_coin}\nEngine: {'Gemini 3' if gemini_key else 'Standard'}\nReason: {best_reason}\n💰 Invested: ${invest_amt:.0f} (₹{inv_inr:,.0f})")
+                    msg = (f"🚀 *AI Trade Started*\nAsset: {best_coin}\nReason: {best_reason}\n💰 Invested: ${invest_amt:.0f} (₹{inv_inr:,.0f})")
                     send_telegram_alert(msg)
 
         # ==========================================
@@ -658,7 +655,7 @@ def show_ai_autopilot_page():
                     else:
                         st.write("Generating orders...")
             
-            # --- NEW SUMMARY TABLE (ADDED PER REQUEST) ---
+            # --- SUMMARY TABLE ---
             st.markdown("---")
             st.markdown("### 📊 Active Trade Configurations")
             config_data = []
@@ -673,7 +670,6 @@ def show_ai_autopilot_page():
                     "Invested (INR)": f"₹{g['invest'] * usd_inr:,.2f}"
                 })
             st.table(pd.DataFrame(config_data))
-            # ---------------------------------------------
         else:
             st.info("AI Scanner Active: Waiting for optimal setup...")
         
@@ -693,14 +689,20 @@ def main():
     st.sidebar.markdown("---")
     
     with st.sidebar.expander("🤖 Gemini AI Config"):
-        st.write("❓ Do you need help finding your Gemini API Key?")
-        if st.checkbox("Yes, show instructions"):
-            st.info("1. Go to Google AI Studio.\n2. Create a free API key.\n3. Paste it below.")
+        if check_gemini_eligibility() and HARDCODED_GEMINI_KEY:
+            st.success("✅ System API Key Loaded")
+        else:
+            st.warning("⏳ API Restricted or Missing")
         
-        gemini_key = st.text_input("Gemini API Key", value=st.session_state.get("gemini_api_key", ""), type="password")
-        if st.button("Save API Key"):
-            st.session_state["gemini_api_key"] = gemini_key
-            st.success("Saved!")
+        # Override option
+        new_key = st.text_input("Override API Key (Optional)", type="password")
+        if st.button("Update Key"):
+            if new_key:
+                st.session_state["gemini_api_key"] = new_key
+                st.success("Key Updated!")
+            else:
+                st.session_state["gemini_api_key"] = HARDCODED_GEMINI_KEY
+                st.info("Reverted to System Key")
 
     with st.sidebar.expander("📢 Telegram Alerts"):
         tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
