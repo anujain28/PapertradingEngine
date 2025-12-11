@@ -407,7 +407,6 @@ def show_ai_autopilot_page(usd_inr):
                 "Status": status_msg
             })
             
-        # Trigger Buy if valid (Simulated here for immediate feedback)
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             best_score = -100; best_coin = None; best_reason = ""
             for coin in CRYPTO_SYMBOLS_USD:
@@ -519,7 +518,7 @@ def show_ai_autopilot_page(usd_inr):
 
 def show_crypto_manual_bot_page(usd_inr):
     st.title("🤖 AI Crypto Manual Bot")
-    st.autorefresh(interval=30_000, key="grid_refresh")
+    st_autorefresh(interval=30_000, key="grid_refresh")
     
     st.subheader("🔎 Live Market Analysis (USDT)")
     analysis_data = []
