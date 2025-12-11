@@ -531,6 +531,26 @@ def show_ai_autopilot_page():
         # ==========================================
         # 2. AI JUDGE: ENTRY LOGIC (INTELLIGENT ALGO)
         # ==========================================
+        # -- PREPARE SCAN DATA --
+        scan_data = []
+        for coin in CRYPTO_SYMBOLS_USD:
+            cp = get_current_price(coin)
+            s_score, _, s_reason = gemini3_analysis(coin, gemini_key)
+            
+            status_msg = "Waiting"
+            if any(g['coin'] == coin for g in ap['active_grids']): status_msg = "Active"
+            elif s_score >= 5: status_msg = "Ready to Buy"
+            elif s_score <= -3: status_msg = "Avoid (Bearish)"
+            else: status_msg = "Neutral"
+            
+            scan_data.append({
+                "Asset": coin.replace("-USD",""),
+                "Price": f"${cp:.2f}",
+                "AI Score": s_score,
+                "Analysis": s_reason,
+                "Status": status_msg
+            })
+            
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             best_score = -100; best_coin = None; best_reason = ""
             
@@ -605,6 +625,13 @@ def show_ai_autopilot_page():
         # ==========================================
         # UI DISPLAY
         # ==========================================
+        st.subheader("🔍 Live AI Scanner Insights")
+        if scan_data:
+            st.dataframe(pd.DataFrame(scan_data), use_container_width=True)
+        else:
+            st.info("Initializing Scanner...")
+            
+        st.markdown("---")
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]: st.text(log)
         st.markdown("---")
