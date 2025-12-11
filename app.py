@@ -63,7 +63,7 @@ def apply_custom_style():
             border: 1px solid #666 !important;
         }
         
-        /* Main Page Inputs */
+        /* Main Page Inputs (Ensuring they are white/black too) */
         .main input { 
             background-color: #ffffff !important; 
             color: #000000 !important; 
@@ -84,6 +84,7 @@ def apply_custom_style():
         }
         div[data-testid="stDataFrame"] * { 
             color: #000000 !important; 
+            background-color: #ffffff !important; /* Ensure table cells are white */
         }
         
         /* Metrics Box */
@@ -594,6 +595,7 @@ def show_crypto_manual_bot_page(usd_inr):
     chart_data = get_safe_crypto_data(selected_coin, period=time_range)
     if chart_data is not None:
         fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
+        # Force White Background Theme
         fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='white', paper_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#eee', color='black'), yaxis=dict(showgrid=True, gridcolor='#eee', color='black'), font=dict(color='black'))
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -629,6 +631,7 @@ def show_crypto_report_page(usd_inr):
         df['cumulative_pnl'] = df['pnl'].cumsum()
         
         fig = px.line(df, x='date', y='cumulative_pnl', markers=True, title="Cumulative PnL Over Time")
+        # Ensure charts have black font on white background
         fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)", plot_bgcolor='white', paper_bgcolor='white', font=dict(color='black'))
         st.plotly_chart(fig, use_container_width=True)
     else:
