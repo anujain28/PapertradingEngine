@@ -77,11 +77,14 @@ def apply_custom_style():
             background-color: #333333 !important; 
         }
         
-        /* 2. Force all text elements inside the DataFrame container to white */
+        /* 2. Force all text elements inside the DataFrame container to white (ULTRA-SPECIFIC) */
         div[data-testid="stDataFrame"] * { 
-            color: #ffffff !important; 
+            color: #ffffff !important; /* FORCE WHITE FONT */
         }
-        
+        div[data-testid="stDataFrame"] span {
+            color: #ffffff !important; /* DOUBLE CHECK SPAN TEXT */
+        }
+
         /* 3. Force st.table/th/td background and text color to dark theme */
         .main table,
         .main th,
