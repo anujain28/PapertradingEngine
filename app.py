@@ -17,13 +17,6 @@ from telegram.ext import Application
 import yfinance as yf
 import plotly.graph_objects as go
 
-# --- IMPORT STOCK MODULE ---
-try:
-    import app1
-    STOCKS_MODULE_AVAILABLE = True
-except ImportError:
-    STOCKS_MODULE_AVAILABLE = False
-
 # --- IMPORT CRYPTO BOT ---
 try:
     from crypto_bot import (
@@ -34,17 +27,10 @@ try:
 except ImportError:
     CRYPTO_BOT_AVAILABLE = False
 
-# Try to import NSE
-try:
-    from nsepython import nse_quote_ltp
-    NSE_AVAILABLE = True
-except ImportError:
-    NSE_AVAILABLE = False
-
 # ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
 # ---------------------------
-st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈")
+st.set_page_config(page_title="AI Crypto Trading", layout="wide", page_icon="📈")
 
 def apply_custom_style():
     st.markdown("""
@@ -160,7 +146,7 @@ DB_PATH = "paper_trades.db"
 CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD"]
 
 # ---------------------------
-# DATA FETCHING
+# DATA FETCHING & AI ANALYSIS
 # ---------------------------
 @st.cache_data(ttl=300) 
 def get_safe_crypto_data(symbol, period="1mo"):
@@ -191,6 +177,66 @@ def get_usd_inr_rate():
         pass
     return 84.0 
 
+# --- AI ALGORITHM: Technical Analysis ---
+def calculate_ai_score(symbol):
+    """
+    Analyzes chart data to generate a trading score (-10 to +10).
+    Factors: RSI, SMA Trend, Recent Momentum.
+    """
+    try:
+        # Fetch detailed data (hourly if possible for short term, or daily)
+        data = yf.Ticker(symbol).history(period="1mo", interval="1d")
+        if data is None or len(data) < 26:
+            return 0, 0, "Insufficient Data"
+            
+        close = data['Close']
+        
+        # 1. RSI Calculation (14 period)
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs)).iloc[-1]
+        
+        # 2. Moving Averages (Trend)
+        sma_short = close.rolling(window=7).mean().iloc[-1]
+        sma_long = close.rolling(window=25).mean().iloc[-1]
+        
+        # 3. Momentum (Last 3 days)
+        momentum = (close.iloc[-1] - close.iloc[-4]) / close.iloc[-4] * 100
+        
+        score = 0
+        reason = []
+        
+        # RSI Logic
+        if rsi < 30: 
+            score += 3
+            reason.append("Oversold")
+        elif rsi > 70: 
+            score -= 3
+            reason.append("Overbought")
+        else:
+            pass # Neutral RSI
+            
+        # Trend Logic
+        if sma_short > sma_long:
+            score += 4
+            reason.append("Bullish Trend")
+        else:
+            score -= 4
+            reason.append("Bearish Trend")
+            
+        # Momentum Logic
+        if momentum > 5:
+            score += 2
+            reason.append("High Momentum")
+        elif momentum < -5:
+            score -= 1 
+            
+        return score, rsi, ", ".join(reason)
+    except Exception as e:
+        return 0, 0, f"Error: {str(e)}"
+
 # ---------------------------
 # TELEGRAM HELPER
 # ---------------------------
@@ -207,13 +253,6 @@ def send_telegram_alert(message):
 # ---------------------------
 # STATE MANAGEMENT
 # ---------------------------
-if "state" not in st.session_state:
-    st.session_state["state"] = {
-        "capital": START_CAPITAL,
-        "equity": START_CAPITAL,
-        "positions": {},
-    }
-
 if "grid_bot_active" not in st.session_state:
     st.session_state["grid_bot_active"] = {} 
 
@@ -224,26 +263,27 @@ if "autopilot" not in st.session_state:
     st.session_state["autopilot"] = {
         "running": False, "mode": "PAPER", "currency": "USDT",
         "total_capital": 0.0, "cash_balance": 0.0,
-        "active_grids": [], "logs": [], "history": []
+        "active_grids": [], "logs": [], "history": [],
+        "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5) # Init to allow immediate update
     }
 else:
+    # Ensure all keys exist
     defaults = {
         "running": False, "mode": "PAPER", "currency": "USDT",
         "total_capital": 0.0, "cash_balance": 0.0,
-        "active_grids": [], "logs": [], "history": []
+        "active_grids": [], "logs": [], "history": [],
+        "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
     }
     for k, v in defaults.items():
         if k not in st.session_state["autopilot"]:
             st.session_state["autopilot"][k] = v
 
-keys_to_init = ["engine_status", "engine_running", "loop_started", 
-                "crypto_running", "crypto_status", "crypto_loop_started",
-                "binance_api", "binance_secret", "tg_token", "tg_chat_id",
-                "dhan_client_id", "dhan_token"]
+keys_to_init = ["crypto_running", "crypto_status", "crypto_loop_started",
+                "binance_api", "binance_secret", "tg_token", "tg_chat_id"]
 
 for key in keys_to_init:
     if key not in st.session_state:
-        st.session_state[key] = "" if "tg" in key or "dhan" in key else (None if "binance" in key else False)
+        st.session_state[key] = "" if "tg" in key else (None if "binance" in key else False)
 
 if CRYPTO_BOT_AVAILABLE:
     init_crypto_state()
@@ -260,26 +300,7 @@ def init_db():
 init_db()
 
 # ---------------------------
-# PAGE 1: PAPER TRADING (STOCKS)
-# ---------------------------
-def show_paper_trading_page():
-    st.title("📈 AI Stocks Paper Trading")
-    st_autorefresh(interval=120_000, key="auto_refresh")
-    state = st.session_state["state"]
-    col1, col2 = st.columns(2)
-    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
-    col2.metric("Equity", f"₹{state['equity']:,.2f}")
-    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
-
-# ---------------------------
-# PAGE 2: PNL LOG (STOCKS)
-# ---------------------------
-def show_pnl_page():
-    st.title("📊 Stocks PNL Log")
-    st.write("PNL Data will appear here once trades execute.")
-
-# ---------------------------
-# PAGE 3: CRYPTO BOT (GRID TRADING)
+# PAGE 1: CRYPTO BOT (GRID TRADING)
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -408,7 +429,7 @@ def show_crypto_manual_bot_page():
         st.error("Chart data unavailable.")
 
 # ---------------------------
-# PAGE: AI AUTO-PILOT
+# PAGE: AI AUTO-PILOT (ENHANCED ALGORITHM)
 # ---------------------------
 def show_ai_autopilot_page():
     usd_inr = st.session_state["usd_inr"]
@@ -420,7 +441,7 @@ def show_ai_autopilot_page():
     st.title(f"🚀 AI Auto-Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
     if is_live: st.warning("⚠️ LIVE MONEY MODE ACTIVE")
     else: st.info("ℹ️ Simulation Mode")
-    st_autorefresh(interval=15_000, key="autopilot_refresh") 
+    st_autorefresh(interval=20_000, key="autopilot_refresh") 
     
     if not ap["running"]:
         st.subheader("🛠️ Setup Auto-Pilot")
@@ -440,10 +461,12 @@ def show_ai_autopilot_page():
                 ap["total_capital"] = capital_input
                 ap["cash_balance"] = capital_input
             ap["active_grids"] = []
-            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
+            ap["last_tg_update"] = dt.datetime.now()
+            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] AI Engine Started. Analyzing charts...")
+            send_telegram_alert("🤖 *AI Auto-Pilot Started*\nMarket scanning initialized.")
             st.rerun()
     else:
-        st.success(f"✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids... (Updated: {dt.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')})")
+        st.success(f"✅ AI Engine Running: Scanning BTC, ETH, SOL, BNB, ADA... (Updated: {dt.datetime.now(IST).strftime('%H:%M:%S')})")
         
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
@@ -465,47 +488,156 @@ def show_ai_autopilot_page():
         
         st.markdown("---")
         
-        # SCANNER
+        # ==========================================
+        # 1. AI JUDGE: EXIT LOGIC & MONITORING
+        # ==========================================
+        # Iterate backwards to safely remove items
+        for i in range(len(ap['active_grids']) - 1, -1, -1):
+            g = ap['active_grids'][i]
+            cp = get_current_price(g['coin'])
+            curr_val = g['qty'] * cp
+            pnl = curr_val - g['invest']
+            pnl_pct = (pnl / g['invest']) * 100
+            
+            # Re-Evaluate AI Score
+            score, _, reason = calculate_ai_score(g['coin'])
+            
+            # Conditions for Bot to Stop Trade
+            close_trade = False
+            close_reason = ""
+            
+            # A. Hard Targets
+            if pnl_pct >= g['tp']:
+                close_trade = True
+                close_reason = "✅ Take Profit Hit"
+            elif pnl_pct <= -g['sl']:
+                close_trade = True
+                close_reason = "❌ Stop Loss Hit"
+            
+            # B. AI Sentiment Shift (The "Judge")
+            # If we are long, and score becomes negative (Bearish), exit early to save capital
+            elif score < -2: 
+                close_trade = True
+                close_reason = f"📉 AI Signal Reversal (Score: {score})"
+            
+            if close_trade:
+                ap['cash_balance'] += curr_val
+                ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
+                ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] {close_reason}: Closed {g['coin']}")
+                
+                # Telegram Alert: STOP
+                inv_inr = g['invest'] * usd_inr
+                pnl_inr = pnl * usd_inr
+                msg = (f"🚨 *AI Trade Stopped ({close_reason})*\n"
+                       f"Asset: {g['coin']}\n"
+                       f"💰 PnL: ${pnl:.2f} (₹{pnl_inr:,.0f})\n"
+                       f"📊 Return: {pnl_pct:.2f}%")
+                send_telegram_alert(msg)
+                
+                ap['active_grids'].pop(i)
+        
+        # ==========================================
+        # 2. AI JUDGE: ENTRY LOGIC
+        # ==========================================
+        # Scan if we have cash > 20% and not too many bots
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
-            scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
-            if not any(g['coin'] == scan_coin for g in ap['active_grids']):
-                cp = get_current_price(scan_coin)
-                chance = random.randint(1, 10)
-                if chance > 8 and cp > 0: 
-                    invest_amt = ap['cash_balance'] * 0.2 
-                    # Grid Params
+            best_score = -100
+            best_coin = None
+            best_reason = ""
+            
+            for coin in CRYPTO_SYMBOLS_USD:
+                if any(g['coin'] == coin for g in ap['active_grids']): continue
+                    
+                score, rsi, reason = calculate_ai_score(coin)
+                if score > best_score:
+                    best_score = score
+                    best_coin = coin
+                    best_reason = reason
+            
+            # Entry Threshold
+            if best_coin and best_score >= 4:
+                cp = get_current_price(best_coin)
+                if cp > 0:
+                    allocation_pct = 0.4 if best_score >= 7 else 0.2
+                    invest_amt = ap['cash_balance'] * allocation_pct
+                    
+                    # Cap investment if we want to reserve cash for a second bot
+                    if ap['cash_balance'] >= (ap['total_capital'] * 0.5):
+                        invest_amt = min(invest_amt, ap['cash_balance'] * 0.5)
+
                     lower = cp * 0.95
                     upper = cp * 1.05
-                    grid_levels = np.linspace(lower, upper, 5)
-                    grid_orders = []
-                    for lvl in grid_levels:
+                    tp_target = 2.5 if best_score >= 7 else 1.5
+                    sl_target = 2.0
+                    
+                    grid_orders = [] # Mock orders for visual
+                    for lvl in np.linspace(lower, upper, 5):
                         if lvl < cp: grid_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
                         else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
 
                     new_grid = {
-                        "coin": scan_coin, "entry": cp, 
+                        "coin": best_coin, "entry": cp, 
                         "lower": lower, "upper": upper,
                         "qty": invest_amt/cp, "invest": invest_amt, 
-                        "grids": 5, "tp": 2.0, "sl": 3.0,
-                        "orders": grid_orders
+                        "grids": 5, "tp": tp_target, "sl": sl_target,
+                        "orders": grid_orders,
+                        "ai_reason": best_reason,
+                        "expected_profit": invest_amt * (tp_target/100),
+                        "expected_loss": invest_amt * (sl_target/100)
                     }
                     ap['active_grids'].append(new_grid)
                     ap['cash_balance'] -= invest_amt
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Deployed Grid: {scan_coin}")
-                elif chance < 3:
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🤖 AI BUY {best_coin}: {best_reason}")
+                    
+                    # Telegram Alert: START
+                    inv_inr = invest_amt * usd_inr
+                    msg = (f"🚀 *AI Trade Started*\n"
+                           f"Asset: {best_coin}\n"
+                           f"reason: {best_reason}\n"
+                           f"💰 Invested: ${invest_amt:.0f} (₹{inv_inr:,.0f})\n"
+                           f"🎯 Target: +{tp_target}%")
+                    send_telegram_alert(msg)
 
+        # ==========================================
+        # 3. TELEGRAM PERIODIC PNL REPORT
+        # ==========================================
+        # Send update every 4 hours OR if user forces it
+        now = dt.datetime.now()
+        last_update = ap.get('last_tg_update', now)
+        if isinstance(last_update, str): last_update = pd.to_datetime(last_update) # Safety fix
+        
+        # Interval check (4 hours = 14400 seconds)
+        if (now - last_update).total_seconds() > 14400:
+            if ap['active_grids']:
+                msg_lines = ["📊 *AI Auto-Pilot Periodic Report*"]
+                total_curr_pnl = 0.0
+                for g in ap['active_grids']:
+                     cp = get_current_price(g['coin'])
+                     pnl = (g['qty'] * cp) - g['invest']
+                     total_curr_pnl += pnl
+                     msg_lines.append(f"• {g['coin']}: ${pnl:.2f}")
+                
+                total_pnl_inr = total_curr_pnl * usd_inr
+                msg_lines.append(f"\n💰 Net Floating PnL: ${total_curr_pnl:.2f} (₹{total_pnl_inr:,.0f})")
+                send_telegram_alert("\n".join(msg_lines))
+                ap['last_tg_update'] = now
+                ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 📤 Sent Periodic Telegram Report")
+
+        # ==========================================
+        # UI DISPLAY
+        # ==========================================
         st.subheader("🧠 AI Activity Log")
         for log in ap['logs'][:5]:
             st.text(log)
 
         st.markdown("---")
 
-        st.subheader(f"💼 Active Grids")
+        st.subheader(f"💼 Active AI Trades")
         if ap['active_grids']:
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
-            c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
-            c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
+            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1, 1, 1, 0.8])
+            c1.markdown("**Asset**"); c2.markdown("**Score/Reason**"); 
+            c3.markdown("**Invested**"); c4.markdown("**Exp. Profit**"); c5.markdown("**Exp. Loss**"); 
+            c6.markdown("**Current Val**"); c7.markdown("**PnL**"); c8.markdown("**Action**")
             
             sum_inv = 0.0; sum_val = 0.0; sum_pnl = 0.0
 
@@ -515,65 +647,47 @@ def show_ai_autopilot_page():
                 pnl = curr_val - g['invest']
                 sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
                 
-                # Check for regenerated orders
-                if 'orders' not in g or not g['orders']:
-                    g_levels = np.linspace(g['lower'], g['upper'], 5)
-                    new_orders = []
-                    for lvl in g_levels:
-                        if lvl < cp: new_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
-                        else: new_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
-                    g['orders'] = new_orders
+                # Live Score
+                score, _, _ = calculate_ai_score(g['coin'])
 
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 1, 1, 1, 1, 1, 1, 0.8])
                 c1.write(g['coin'].replace("-USD",""))
-                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}")
-                c3.write(f"{g.get('grids',5)} Grids | TP {g.get('tp',2.0)}%")
-                c4.write(f"${g['invest']:.2f}")
-                c5.write(f"${curr_val:.2f}")
-                c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
+                c2.caption(f"Score: {score} | {g.get('ai_reason','Auto')[:15]}...")
+                c3.write(f"${g['invest']:.2f}")
+                c4.markdown(f":green[+${g.get('expected_profit', 0):.2f}]")
+                c5.markdown(f":red[-${g.get('expected_loss', 0):.2f}]")
+                c6.write(f"${curr_val:.2f}")
+                c7.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
                 
-                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
+                if c8.button("Stop 🟥", key=f"ap_stop_{i}"):
                     ap['cash_balance'] += curr_val
                     pnl_pct = (pnl/g['invest'])*100
                     ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
-                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 User Manual Stop: {g['coin']}")
                     
                     inv_inr = g['invest'] * usd_inr
-                    val_inr = curr_val * usd_inr
                     pnl_inr = pnl * usd_inr
-                    msg = (f"🚨 *AI Auto-Pilot Trade Closed*\n"
+                    msg = (f"🚨 *Manual Stop Initiated*\n"
                            f"Asset: {g['coin']}\n"
-                           f"💰 Invested: ₹{inv_inr:,.2f}\n"
-                           f"💵 Final Value: ₹{val_inr:,.2f}\n"
-                           f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                           f"💰 PnL: ${pnl:.2f} (₹{pnl_inr:,.0f})")
                     send_telegram_alert(msg)
                     
                     ap['active_grids'].pop(i)
                     st.rerun()
             
             st.markdown("<div style='border-top:1px solid #ddd; padding-top:10px; margin-top:5px;'></div>", unsafe_allow_html=True)
-            f1, f2, f3, f4, f5, f6, f7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
+            f1, f2, f3, f4, f5, f6, f7, f8 = st.columns([1, 1, 1, 1, 1, 1, 1, 0.8])
             f1.write("**TOTALS**")
-            f4.write(f"**${sum_inv:,.2f}**")
-            f5.write(f"**${sum_val:,.2f}**")
+            f3.write(f"**${sum_inv:,.2f}**")
+            f6.write(f"**${sum_val:,.2f}**")
             pnl_col = "green" if sum_pnl >= 0 else "red"
-            f6.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
-
-            st.markdown("---")
-            st.markdown("### 📋 Live Grid Orders")
-            for g in ap['active_grids']:
-                with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
-                    if 'orders' in g and g['orders']:
-                        ord_df = pd.DataFrame(g['orders'])
-                        ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
-                        st.table(ord_df)
-                    else:
-                        st.write("Generating orders...")
+            f7.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
         else:
-            st.info("Scanning for opportunities...")
+            st.info("AI Scanner Active: Waiting for optimal setup...")
         
-        if st.button("⏹ Stop Engine"): 
+        if st.button("⏹ Stop AI Engine"): 
             ap["running"] = False
+            send_telegram_alert("🛑 *AI Auto-Pilot Stopped manually.*")
             st.rerun()
 
 # ---------------------------
@@ -590,10 +704,17 @@ def show_crypto_report_page():
     running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
     running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
     
+    total_exp_profit = sum([g.get('expected_profit', 0.0) for g in ap['active_grids']])
+    total_exp_loss = sum([g.get('expected_loss', 0.0) for g in ap['active_grids']])
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Live Invested", f"₹{running_inv * usd_inr:,.0f}")
     c2.metric("Live Value", f"₹{running_val * usd_inr:,.0f}")
     c3.metric("Live PnL", f"₹{(running_val - running_inv) * usd_inr:,.0f}")
+
+    c4, c5 = st.columns(2)
+    c4.metric("📈 Total Expected Profit", f"₹{total_exp_profit * usd_inr:,.0f} (${total_exp_profit:.2f})")
+    c5.metric("📉 Total Expected Loss (Risk)", f"₹{total_exp_loss * usd_inr:,.0f} (${total_exp_loss:.2f})")
     
     st.markdown("---")
     st.subheader("🏁 Closed Trades")
@@ -620,12 +741,8 @@ def main():
     st.sidebar.title("💰 Paisa Banao")
     st.sidebar.title("Navigation")
     
-    st.sidebar.subheader("📈 Stocks Menu")
-    page_stocks = st.sidebar.radio("Stocks Actions", ["Paper Trading", "PNL Log", "Auto-Pilot App"], label_visibility="collapsed")
-    
-    st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
-    page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    current_page = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     
@@ -646,38 +763,7 @@ def main():
             st.session_state["binance_api"] = api
             st.session_state["binance_secret"] = sec
             st.success("Saved!")
-
-    # 3. Dhan Config
-    with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
-        d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
-        d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
-        if st.button("💾 Save Dhan Config"):
-            st.session_state["dhan_client_id"] = d_id
-            st.session_state["dhan_token"] = d_token
-            st.success("Saved!")
-
-    if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
-    if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
-    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
     
-    current_page = "AI Auto-Pilot" 
-    
-    if page_stocks != st.session_state["last_stock_page"]:
-        current_page = page_stocks
-        st.session_state["active_section"] = "stocks"
-        st.session_state["last_stock_page"] = page_stocks
-    elif page_crypto != st.session_state["last_crypto_page"]:
-        current_page = page_crypto
-        st.session_state["active_section"] = "crypto"
-        st.session_state["last_crypto_page"] = page_crypto
-    else:
-        if st.session_state.get("active_section") == "stocks":
-            current_page = page_stocks
-        else:
-            current_page = page_crypto
-
-    if not st.session_state.get("loop_started", False):
-        st.session_state["loop_started"] = True
     if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
         t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
         t_crypto.start()
@@ -689,13 +775,6 @@ def main():
         show_crypto_report_page()
     elif current_page == "Manual Bot":
         show_crypto_manual_bot_page()
-    elif current_page == "Auto-Pilot App":
-        if STOCKS_MODULE_AVAILABLE: app1.run_stocks_app()
-        else: st.error("app1.py missing")
-    elif current_page == "Paper Trading":
-        show_paper_trading_page()
-    elif current_page == "PNL Log":
-        show_pnl_page()
 
 if __name__ == "__main__":
     main()
