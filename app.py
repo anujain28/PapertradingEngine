@@ -50,7 +50,7 @@ st.set_page_config(page_title="AI Crypto Engine", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* Global App Background */
+        /* Global App Background: White */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
         p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
@@ -70,19 +70,24 @@ def apply_custom_style():
             border: 1px solid #ccc !important; 
         }
 
-        /* --- TABLE/DATAFRAME STYLING (BLACK BG, WHITE FONT) --- */
-        /* Targets st.dataframe wrapper */
+        /* --- TABLE/DATAFRAME STYLING (BLACK BG, WHITE FONT - AGGRESSIVE FIX) --- */
+        
+        /* 1. Force container background to dark */
         div[data-testid="stDataFrame"] { 
             background-color: #333333 !important; 
         }
         
-        /* Targets st.table rows, headers, and internal DataFrame text */
-        div[data-testid="stDataFrame"] *,
+        /* 2. Force all text elements inside the DataFrame container to white */
+        div[data-testid="stDataFrame"] * { 
+            color: #ffffff !important; 
+        }
+        
+        /* 3. Force st.table/th/td background and text color to dark theme */
         .main table,
         .main th,
         .main td {
-            color: #ffffff !important; /* FORCE FONT TO WHITE */
-            background-color: #333333 !important; /* FORCE BACKGROUND TO BLACK */
+            color: #ffffff !important;
+            background-color: #333333 !important;
         }
         
         /* Expanders & Main Content */
@@ -94,7 +99,7 @@ def apply_custom_style():
         .main div[data-testid="stExpander"] div[role="group"] { 
             background-color: #ffffff !important; 
         }
-
+        
         /* Metrics Box */
         div[data-testid="metric-container"] {
             background-color: #f8f9fa !important;
