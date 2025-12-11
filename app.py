@@ -52,9 +52,9 @@ def apply_custom_style():
         <style>
         /* Global App Background */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li, td, th { color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* Sidebar Styling */
+        /* Sidebar Styling (Dark) */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         section[data-testid="stSidebar"] input { 
@@ -63,14 +63,29 @@ def apply_custom_style():
             border: 1px solid #666 !important;
         }
         
-        /* Main Page Inputs */
+        /* Main Page Inputs (White BG, Black Text) */
         .main input { 
             background-color: #ffffff !important; 
             color: #000000 !important; 
             border: 1px solid #ccc !important; 
         }
+
+        /* --- TABLE/DATAFRAME STYLING (BLACK BG, WHITE FONT) --- */
+        /* Targets st.dataframe wrapper */
+        div[data-testid="stDataFrame"] { 
+            background-color: #333333 !important; 
+        }
         
-        /* Expanders & Dataframes */
+        /* Targets st.table rows, headers, and internal DataFrame text */
+        div[data-testid="stDataFrame"] *,
+        .main table,
+        .main th,
+        .main td {
+            color: #ffffff !important; /* FORCE FONT TO WHITE */
+            background-color: #333333 !important; /* FORCE BACKGROUND TO BLACK */
+        }
+        
+        /* Expanders & Main Content */
         .main div[data-testid="stExpander"] details summary { 
             background-color: #f0f2f6 !important; 
             color: #000000 !important; 
@@ -79,17 +94,7 @@ def apply_custom_style():
         .main div[data-testid="stExpander"] div[role="group"] { 
             background-color: #ffffff !important; 
         }
-        div[data-testid="stDataFrame"] { 
-            background-color: #333333 !important; 
-        }
-        div[data-testid="stDataFrame"] *,
-        .main table,
-        .main th,
-        .main td {
-            color: #ffffff !important;
-            background-color: #333333 !important;
-        }
-        
+
         /* Metrics Box */
         div[data-testid="metric-container"] {
             background-color: #f8f9fa !important;
@@ -104,9 +109,6 @@ def apply_custom_style():
             color: black !important;
             border: 1px solid #9ca3af !important;
         }
-        
-        /* Plotly Charts: Ensure text/grid is visible (White) */
-        .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
         """, unsafe_allow_html=True)
 
