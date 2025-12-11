@@ -409,7 +409,7 @@ def show_ai_autopilot_page(usd_inr):
                 if score > best_score:
                     best_score = score; best_coin = coin; best_reason = reason
             
-            if best_coin and best_score >= 2
+            if best_coin and best_score >= 2:
                 cp = get_current_price(best_coin)
                 if cp > 0:
                     alloc = 0.4 if best_score >= 8 else 0.2
