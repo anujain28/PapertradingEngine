@@ -1,64 +1,701 @@
-import streamlit as st
+import os
+import time
 import threading
-from streamlit.runtime.scriptrunner import add_script_run_ctx
+import datetime as dt
+import sqlite3
+from typing import Dict, List, Optional
+import random
 
+import configparser
+import pytz
+import requests
+import pandas as pd
+import numpy as np
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
+from telegram.ext import Application
+import yfinance as yf
+import plotly.graph_objects as go
+
+# --- IMPORT STOCK MODULE ---
 try:
-    from utils import apply_custom_style, init_db, show_sidebar_config
-    import crypto
-    import stocks
-    MODULES_LOADED = True
-except ImportError as e:
-    MODULES_LOADED = False
-    ERR_MSG = str(e)
+    import app1
+    STOCKS_MODULE_AVAILABLE = True
+except ImportError:
+    STOCKS_MODULE_AVAILABLE = False
 
-st.set_page_config(page_title="Paisa Banao Engine", layout="wide", page_icon="💰")
+# --- IMPORT CRYPTO BOT ---
+try:
+    from crypto_bot import (
+        init_crypto_state, crypto_trading_loop,
+        get_crypto_positions
+    )
+    CRYPTO_BOT_AVAILABLE = True
+except ImportError:
+    CRYPTO_BOT_AVAILABLE = False
 
+# Try to import NSE
+try:
+    from nsepython import nse_quote_ltp
+    NSE_AVAILABLE = True
+except ImportError:
+    NSE_AVAILABLE = False
+
+# ---------------------------
+# PAGE CONFIG + GLOBAL STYLE
+# ---------------------------
+st.set_page_config(page_title="AI Paper Trading", layout="wide", page_icon="📈")
+
+def apply_custom_style():
+    st.markdown("""
+        <style>
+        /* Global Styles */
+        .stApp { background-color: #ffffff !important; color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
+        
+        /* Sidebar Container */
+        section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
+        section[data-testid="stSidebar"] * { color: white !important; }
+        
+        /* --- SIDEBAR INPUTS (High Contrast) --- */
+        section[data-testid="stSidebar"] input { 
+            background-color: #000000 !important; 
+            color: #ffffff !important; 
+            caret-color: #ffffff !important;
+            border: 1px solid #666 !important;
+        }
+        section[data-testid="stSidebar"] label {
+            color: #ffffff !important;
+        }
+        
+        /* --- SIDEBAR EXPANDER FIX (Black BG, White Text) --- */
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary {
+            background-color: #333 !important; /* Dark Grey Header */
+            color: #ffffff !important;
+            border: 1px solid #555;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] div[role="group"] {
+            background-color: #262730 !important; /* Match Sidebar BG */
+            color: #ffffff !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] p,
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] span {
+            color: #ffffff !important;
+        }
+
+        /* --- MAIN PAGE EXPANDER (White BG, Black Text for Grid Orders) --- */
+        /* Only targets expanders NOT in the sidebar */
+        .main div[data-testid="stExpander"] details summary {
+            background-color: #f8f9fa !important;
+            color: #000000 !important;
+            border: 1px solid #dee2e6;
+        }
+        .main div[data-testid="stExpander"] div[role="group"] {
+            background-color: #ffffff !important;
+        }
+        .main div[data-testid="stExpander"] table, 
+        .main div[data-testid="stExpander"] td, 
+        .main div[data-testid="stExpander"] th,
+        .main div[data-testid="stExpander"] div {
+            color: #000000 !important;
+        }
+
+        /* Metrics & Containers */
+        div[data-testid="metric-container"] {
+            background-color: #f0f2f6 !important;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        
+        /* Buttons */
+        .stButton > button {
+            background-color: #e5e7eb !important;
+            color: black !important;
+            border: 1px solid #9ca3af !important;
+        }
+        .stButton > button:hover {
+            background-color: #d1d5db !important;
+        }
+
+        /* --- DROPDOWN MENU FIX --- */
+        div[data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+            border: 1px solid #ced4da;
+        }
+        div[data-baseweb="popover"], div[data-baseweb="menu"] {
+            background-color: #ffffff !important;
+        }
+        div[role="option"] {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+        }
+        div[role="option"]:hover {
+            background-color: #f0f2f6 !important;
+        }
+        div[data-baseweb="select"] span {
+            color: #000000 !important; 
+        }
+        
+        /* Dataframes */
+        div[data-testid="stDataFrame"] {
+            background-color: #ffffff !important;
+        }
+        div[data-testid="stDataFrame"] div[class*="stDataFrame"] {
+            color: #000000 !important;
+        }
+
+        /* Chart Override */
+        .js-plotly-plot .plotly .modebar { display: none !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+# ---------------------------
+# CONFIG
+# ---------------------------
+IST = pytz.timezone("Asia/Kolkata")
+START_CAPITAL = 100000.0
+DB_PATH = "paper_trades.db"
+CRYPTO_SYMBOLS_USD = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD"]
+
+# ---------------------------
+# DATA FETCHING
+# ---------------------------
+@st.cache_data(ttl=300) 
+def get_safe_crypto_data(symbol, period="1mo"):
+    try:
+        ticker = yf.Ticker(symbol)
+        history = ticker.history(period=period)
+        if history.empty: return None
+        return history
+    except:
+        return None
+
+def get_current_price(symbol):
+    try:
+        data = yf.Ticker(symbol).history(period="1d")
+        if not data.empty:
+            return data["Close"].iloc[-1]
+    except:
+        pass
+    return 0.0
+
+@st.cache_data(ttl=3600)
+def get_usd_inr_rate():
+    try:
+        data = yf.Ticker("INR=X").history(period="1d")
+        if not data.empty:
+            return data["Close"].iloc[-1]
+    except:
+        pass
+    return 84.0 
+
+# ---------------------------
+# TELEGRAM HELPER
+# ---------------------------
+def send_telegram_alert(message):
+    token = st.session_state.get("tg_token")
+    chat_id = st.session_state.get("tg_chat_id")
+    if token and chat_id:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"})
+        except Exception as e:
+            print(f"Telegram Error: {e}")
+
+# ---------------------------
+# STATE MANAGEMENT
+# ---------------------------
+if "state" not in st.session_state:
+    st.session_state["state"] = {
+        "capital": START_CAPITAL,
+        "equity": START_CAPITAL,
+        "positions": {},
+    }
+
+if "grid_bot_active" not in st.session_state:
+    st.session_state["grid_bot_active"] = {} 
+
+if "usd_inr" not in st.session_state:
+    st.session_state["usd_inr"] = get_usd_inr_rate()
+
+if "autopilot" not in st.session_state:
+    st.session_state["autopilot"] = {
+        "running": False, "mode": "PAPER", "currency": "USDT",
+        "total_capital": 0.0, "cash_balance": 0.0,
+        "active_grids": [], "logs": [], "history": []
+    }
+else:
+    defaults = {
+        "running": False, "mode": "PAPER", "currency": "USDT",
+        "total_capital": 0.0, "cash_balance": 0.0,
+        "active_grids": [], "logs": [], "history": []
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state["autopilot"]:
+            st.session_state["autopilot"][k] = v
+
+keys_to_init = ["engine_status", "engine_running", "loop_started", 
+                "crypto_running", "crypto_status", "crypto_loop_started",
+                "binance_api", "binance_secret", "tg_token", "tg_chat_id",
+                "dhan_client_id", "dhan_token"]
+
+for key in keys_to_init:
+    if key not in st.session_state:
+        st.session_state[key] = "" if "tg" in key or "dhan" in key else (None if "binance" in key else False)
+
+if CRYPTO_BOT_AVAILABLE:
+    init_crypto_state()
+
+# ---------------------------
+# DATABASE
+# ---------------------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, side TEXT, qty INTEGER, price REAL, timestamp TEXT, pnl REAL)""")
+    conn.commit()
+    conn.close()
+init_db()
+
+# ---------------------------
+# PAGE 1: PAPER TRADING (STOCKS)
+# ---------------------------
+def show_paper_trading_page():
+    st.title("📈 AI Stocks Paper Trading")
+    st_autorefresh(interval=120_000, key="auto_refresh")
+    state = st.session_state["state"]
+    col1, col2 = st.columns(2)
+    col1.metric("Free Capital", f"₹{state['capital']:,.2f}")
+    col2.metric("Equity", f"₹{state['equity']:,.2f}")
+    st.info(f"Engine Status: {st.session_state.get('engine_status')}")
+
+# ---------------------------
+# PAGE 2: PNL LOG (STOCKS)
+# ---------------------------
+def show_pnl_page():
+    st.title("📊 Stocks PNL Log")
+    st.write("PNL Data will appear here once trades execute.")
+
+# ---------------------------
+# PAGE 3: CRYPTO BOT (GRID TRADING)
+# ---------------------------
+def show_crypto_manual_bot_page():
+    st.title("🤖 AI Crypto Manual Bot")
+    st_autorefresh(interval=30_000, key="grid_refresh") 
+    usd_inr = st.session_state["usd_inr"]
+
+    st.subheader("🔎 Live Market Analysis (USDT)")
+    analysis_data = []
+    for coin in CRYPTO_SYMBOLS_USD:
+        hist = get_safe_crypto_data(coin, period="5d")
+        if hist is not None:
+            curr = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            change = ((curr - prev) / prev) * 100
+            rec = "HOLD"
+            if change > 3.0: rec = "SELL (Overbought)"
+            elif change < -3.0: rec = "BUY (Oversold)"
+            volatility = (hist['High'] - hist['Low']).mean() / curr * 100
+            analysis_data.append({
+                "Coin": coin.replace("-USD", ""),
+                "CMP (USDT)": f"${curr:,.2f}",
+                "24h Change %": f"{change:+.2f}%",
+                "Recommendation": rec,
+                "Vol. Score": f"{volatility:.1f}/10"
+            })
+    st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
+    st.markdown("---")
+
+    # Grid Config
+    st.subheader("⚙️ Configure Manual Bot")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
+        curr_price = get_current_price(selected_coin)
+        st.metric("Current Price", f"${curr_price:,.4f}")
+        st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
+        
+        if st.button("🧠 Auto-Pick Settings"):
+            if curr_price > 0:
+                st.session_state['auto_lower'] = float(curr_price * 0.95)
+                st.session_state['auto_upper'] = float(curr_price * 1.05)
+                st.session_state['auto_grids'] = 5
+                st.session_state['auto_tp'] = 2.0
+                st.session_state['auto_sl'] = 3.0
+                st.session_state['auto_inv'] = 100.0
+                st.success("Loaded!")
+
+    with c2:
+        col_a, col_b = st.columns(2)
+        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0), format="%.4f")
+        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0), format="%.4f")
+        col_c, col_d = st.columns(2)
+        grids = col_c.number_input("Grids", min_value=2, max_value=20, value=st.session_state.get('auto_grids', 5))
+        invest = col_d.number_input("Investment", value=st.session_state.get('auto_inv', 100.0))
+        col_e, col_f = st.columns(2)
+        tp_pct = col_e.number_input("TP (%)", value=st.session_state.get('auto_tp', 2.0))
+        sl_pct = col_f.number_input("SL (%)", value=st.session_state.get('auto_sl', 3.0))
+
+    if st.button("▶️ Start Manual Bot"):
+        if curr_price > 0 and lower_p < upper_p:
+            bot_id = selected_coin
+            entry_qty = invest / curr_price
+            st.session_state["grid_bot_active"][bot_id] = {
+                "coin": selected_coin, "entry_price": curr_price,
+                "lower": lower_p, "upper": upper_p, "grids": grids,
+                "qty": entry_qty, "invest": invest, "tp": tp_pct, "sl": sl_pct,
+                "status": "Running", "start_time": dt.datetime.now().strftime("%H:%M:%S")
+            }
+            st.success("Bot Started!")
+
+    # Active Bots
+    st.markdown("---")
+    st.subheader("📍 Active Manual Bots")
+    active_bots = st.session_state["grid_bot_active"]
+    if active_bots:
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([1,1,1,2,2,2,1])
+        h1.write("**Coin**"); h2.write("**Entry**"); h3.write("**CMP**"); 
+        h4.write("**Inv (USD/INR)**"); h5.write("**PnL (USD/INR)**"); h6.write("**Status**"); h7.write("**Action**")
+        
+        for b_id, data in list(active_bots.items()):
+            cp = get_current_price(data['coin'])
+            current_val_usd = data['qty'] * cp
+            pnl_usd = current_val_usd - data['invest']
+            pnl_inr = pnl_usd * usd_inr
+            inv_inr = data['invest'] * usd_inr
+            pnl_pct = (pnl_usd / data['invest']) * 100
+            
+            status_text = "🟢 Running"
+            if pnl_pct >= data['tp']: status_text = "✅ TP HIT"
+            elif pnl_pct <= -data['sl']: status_text = "❌ SL HIT"
+
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,2,2,2,1])
+            c1.write(data['coin'].replace("-USD",""))
+            c2.write(f"${data['entry_price']:.4f}")
+            c3.write(f"${cp:.4f}")
+            c4.write(f"${data['invest']:.0f} / ₹{inv_inr:,.0f}")
+            pnl_color = "green" if pnl_usd >= 0 else "red"
+            c5.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
+            c6.write(status_text)
+            
+            if c7.button("Stop", key=f"stop_{b_id}"):
+                final_val_inr = inv_inr + pnl_inr
+                msg = (f"🚨 *Manual Crypto Trade Closed*\n"
+                       f"Asset: {data['coin']}\n"
+                       f"💰 Invested: ₹{inv_inr:,.2f}\n"
+                       f"💵 Final Value: ₹{final_val_inr:,.2f}\n"
+                       f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                send_telegram_alert(msg)
+                
+                del st.session_state["grid_bot_active"][b_id]
+                st.rerun()
+    else:
+        st.info("No active manual bots.")
+
+    st.markdown("---")
+    st.subheader(f"📉 Asset Price Chart: {selected_coin}")
+    t_col1, t_col2 = st.columns([3, 1])
+    with t_col1:
+        time_range = st.radio("Select Timeframe", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "ytd", "max"], index=2, horizontal=True)
+    chart_data = get_safe_crypto_data(selected_coin, period=time_range)
+    if chart_data is not None:
+        fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
+        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='black', paper_bgcolor='black', xaxis=dict(showgrid=True, gridcolor='#333', color='white'), yaxis=dict(showgrid=True, gridcolor='#333', color='white'), font=dict(color='white'))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("Chart data unavailable.")
+
+# ---------------------------
+# PAGE: AI AUTO-PILOT
+# ---------------------------
+def show_ai_autopilot_page():
+    usd_inr = st.session_state["usd_inr"]
+    ap = st.session_state["autopilot"]
+    api_key = st.session_state.get("binance_api")
+    secret_key = st.session_state.get("binance_secret")
+    is_live = bool(api_key and secret_key)
+    
+    st.title(f"🚀 AI Auto-Pilot ({'🔴 LIVE' if is_live else '🟢 PAPER'})")
+    if is_live: st.warning("⚠️ LIVE MONEY MODE ACTIVE")
+    else: st.info("ℹ️ Simulation Mode")
+    st_autorefresh(interval=15_000, key="autopilot_refresh") 
+    
+    if not ap["running"]:
+        st.subheader("🛠️ Setup Auto-Pilot")
+        c1, c2, c3 = st.columns(3)
+        currency_mode = c1.radio("Capital Currency", ["USDT (USD)", "INR (₹)"])
+        capital_input = c2.number_input("Total Capital Allocation", min_value=10.0, value=1000.0, step=100.0)
+        
+        btn_label = "🚀 Launch LIVE AI" if is_live else "🚀 Launch Simulation"
+        if c3.button(btn_label, type="primary", use_container_width=True):
+            ap["running"] = True
+            ap["mode"] = "LIVE" if is_live else "PAPER"
+            ap["currency"] = "USDT" if "USDT" in currency_mode else "INR"
+            if ap["currency"] == "INR":
+                ap["total_capital"] = capital_input / usd_inr
+                ap["cash_balance"] = capital_input / usd_inr
+            else:
+                ap["total_capital"] = capital_input
+                ap["cash_balance"] = capital_input
+            ap["active_grids"] = []
+            ap["logs"].append(f"[{dt.datetime.now().strftime('%H:%M')}] Engine Started.")
+            st.rerun()
+    else:
+        st.success(f"✅ AI Engine is Active: Analyzing Market Volatility & Updating Grids... (Updated: {dt.datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')})")
+        
+        curr_sym = "$" if ap["currency"] == "USDT" else "₹"
+        conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
+        
+        invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
+        grid_current_val = 0.0
+        for g in ap['active_grids']:
+             cp = get_current_price(g['coin'])
+             grid_current_val += (g['qty'] * cp)
+
+        total_val_usd = ap['cash_balance'] + grid_current_val
+        total_pnl_usd = total_val_usd - ap['total_capital']
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Value", f"{curr_sym}{total_val_usd * conv_factor:,.2f}")
+        m2.metric("Cash", f"{curr_sym}{ap['cash_balance'] * conv_factor:,.2f}")
+        m3.metric("Invested", f"{curr_sym}{grid_current_val * conv_factor:,.2f}")
+        m4.metric("Net PnL", f"{curr_sym}{total_pnl_usd * conv_factor:,.2f}", delta=f"{(total_pnl_usd/ap['total_capital'])*100:.2f}%")
+        
+        st.markdown("---")
+        
+        # SCANNER
+        if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
+            scan_coin = random.choice(CRYPTO_SYMBOLS_USD)
+            if not any(g['coin'] == scan_coin for g in ap['active_grids']):
+                cp = get_current_price(scan_coin)
+                chance = random.randint(1, 10)
+                if chance > 8 and cp > 0: 
+                    invest_amt = ap['cash_balance'] * 0.2 
+                    # Grid Params
+                    lower = cp * 0.95
+                    upper = cp * 1.05
+                    grid_levels = np.linspace(lower, upper, 5)
+                    grid_orders = []
+                    for lvl in grid_levels:
+                        if lvl < cp: grid_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
+                        else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
+
+                    new_grid = {
+                        "coin": scan_coin, "entry": cp, 
+                        "lower": lower, "upper": upper,
+                        "qty": invest_amt/cp, "invest": invest_amt, 
+                        "grids": 5, "tp": 2.0, "sl": 3.0,
+                        "orders": grid_orders
+                    }
+                    ap['active_grids'].append(new_grid)
+                    ap['cash_balance'] -= invest_amt
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Deployed Grid: {scan_coin}")
+                elif chance < 3:
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] Scanned {scan_coin}: Neutral.")
+
+        st.subheader("🧠 AI Activity Log")
+        for log in ap['logs'][:5]:
+            st.text(log)
+
+        st.markdown("---")
+
+        st.subheader(f"💼 Active Grids")
+        if ap['active_grids']:
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
+            c1.markdown("**Asset**"); c2.markdown("**Range (L-U)**"); c3.markdown("**Grid Config**")
+            c4.markdown("**Invested**"); c5.markdown("**Current Val**"); c6.markdown("**Profit/Loss**"); c7.markdown("**Action**")
+            
+            sum_inv = 0.0; sum_val = 0.0; sum_pnl = 0.0
+
+            for i, g in enumerate(ap['active_grids']):
+                cp = get_current_price(g['coin'])
+                curr_val = g['qty'] * cp
+                pnl = curr_val - g['invest']
+                sum_inv += g['invest']; sum_val += curr_val; sum_pnl += pnl
+                
+                # Check for regenerated orders
+                if 'orders' not in g or not g['orders']:
+                    g_levels = np.linspace(g['lower'], g['upper'], 5)
+                    new_orders = []
+                    for lvl in g_levels:
+                        if lvl < cp: new_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
+                        else: new_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
+                    g['orders'] = new_orders
+
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
+                c1.write(g['coin'].replace("-USD",""))
+                c2.write(f"${g['lower']:.4f} - ${g['upper']:.4f}")
+                c3.write(f"{g.get('grids',5)} Grids | TP {g.get('tp',2.0)}%")
+                c4.write(f"${g['invest']:.2f}")
+                c5.write(f"${curr_val:.2f}")
+                c6.markdown(f":{'green' if pnl>=0 else 'red'}[${pnl:.2f}]")
+                
+                if c7.button("Stop 🟥", key=f"ap_stop_{i}"):
+                    ap['cash_balance'] += curr_val
+                    pnl_pct = (pnl/g['invest'])*100
+                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": pnl, "invested": g['invest'], "return_pct": pnl_pct})
+                    ap['logs'].insert(0, f"[{dt.datetime.now(IST).strftime('%H:%M')}] 🛑 Stopped Grid: {g['coin']}")
+                    
+                    inv_inr = g['invest'] * usd_inr
+                    val_inr = curr_val * usd_inr
+                    pnl_inr = pnl * usd_inr
+                    msg = (f"🚨 *AI Auto-Pilot Trade Closed*\n"
+                           f"Asset: {g['coin']}\n"
+                           f"💰 Invested: ₹{inv_inr:,.2f}\n"
+                           f"💵 Final Value: ₹{val_inr:,.2f}\n"
+                           f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                    send_telegram_alert(msg)
+                    
+                    ap['active_grids'].pop(i)
+                    st.rerun()
+            
+            st.markdown("<div style='border-top:1px solid #ddd; padding-top:10px; margin-top:5px;'></div>", unsafe_allow_html=True)
+            f1, f2, f3, f4, f5, f6, f7 = st.columns([1, 1.5, 1.2, 1.2, 1.2, 1.2, 0.8])
+            f1.write("**TOTALS**")
+            f4.write(f"**${sum_inv:,.2f}**")
+            f5.write(f"**${sum_val:,.2f}**")
+            pnl_col = "green" if sum_pnl >= 0 else "red"
+            f6.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
+
+            st.markdown("---")
+            st.markdown("### 📋 Live Grid Orders")
+            for g in ap['active_grids']:
+                with st.expander(f"Orders for {g['coin'].replace('-USD','')}"):
+                    if 'orders' in g and g['orders']:
+                        ord_df = pd.DataFrame(g['orders'])
+                        ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
+                        st.table(ord_df)
+                    else:
+                        st.write("Generating orders...")
+        else:
+            st.info("Scanning for opportunities...")
+        
+        if st.button("⏹ Stop Engine"): 
+            ap["running"] = False
+            st.rerun()
+
+# ---------------------------
+# PAGE: CRYPTO REPORT
+# ---------------------------
+def show_crypto_report_page():
+    st.title("📑 Crypto PnL Report")
+    ap = st.session_state["autopilot"]
+    usd_inr = st.session_state["usd_inr"]
+    
+    st_autorefresh(interval=30_000, key="report_refresh")
+
+    st.subheader("🔴 Live Portfolio")
+    running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
+    running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Live Invested", f"₹{running_inv * usd_inr:,.0f}")
+    c2.metric("Live Value", f"₹{running_val * usd_inr:,.0f}")
+    c3.metric("Live PnL", f"₹{(running_val - running_inv) * usd_inr:,.0f}")
+    
+    st.markdown("---")
+    st.subheader("🏁 Closed Trades")
+    if ap["history"]:
+        df = pd.DataFrame(ap["history"])
+        df['date'] = pd.to_datetime(df['date'])
+        total_profit = df['pnl'].sum()
+        m1, m2 = st.columns(2)
+        m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
+        m2.metric("Trades", len(df))
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
+    else:
+        st.info("No closed trades.")
+
+# ---------------------------
+# MAIN EXECUTION
+# ---------------------------
 def main():
-    if not MODULES_LOADED:
-        st.error(f"Modules missing! Ensure utils.py, crypto.py, stocks.py are in the folder. Error: {ERR_MSG}")
-        return
-
     apply_custom_style()
-    init_db()
-    crypto.init_crypto_state()
-    stocks.init_stock_state()
-
+    
     st.sidebar.title("💰 Paisa Banao")
     st.sidebar.title("Navigation")
     
     st.sidebar.subheader("📈 Stocks Menu")
-    page_stocks = st.sidebar.radio("Stocks Actions", ["Bomb Stocks", "PNL Log"], label_visibility="collapsed")
+    page_stocks = st.sidebar.radio("Stocks Actions", ["Paper Trading", "PNL Log", "Auto-Pilot App"], label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🪙 Crypto Menu")
-    page_crypto = st.sidebar.radio("Crypto Actions", ["Crypto Auto Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    page_crypto = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
     
-    show_sidebar_config()
+    st.sidebar.markdown("---")
+    
+    # 1. Telegram Config
+    with st.sidebar.expander("📢 Telegram Alerts"):
+        tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+        tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
+        if st.button("💾 Save Telegram Config"):
+            st.session_state["tg_token"] = tg_token
+            st.session_state["tg_chat_id"] = tg_chat
+            st.success("Saved!")
 
-    if "last_stock" not in st.session_state: st.session_state["last_stock"] = page_stocks
-    if "last_crypto" not in st.session_state: st.session_state["last_crypto"] = page_crypto
-    if "mode" not in st.session_state: st.session_state["mode"] = "crypto"
+    # 2. Binance Config
+    with st.sidebar.expander("🔌 Binance Keys"):
+        api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
+        sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
+        if st.button("💾 Save Binance Keys"):
+            st.session_state["binance_api"] = api
+            st.session_state["binance_secret"] = sec
+            st.success("Saved!")
 
-    if page_stocks != st.session_state["last_stock"]:
-        st.session_state["mode"] = "stocks"
-        st.session_state["last_stock"] = page_stocks
-    elif page_crypto != st.session_state["last_crypto"]:
-        st.session_state["mode"] = "crypto"
-        st.session_state["last_crypto"] = page_crypto
+    # 3. Dhan Config
+    with st.sidebar.expander("🇮🇳 Dhan Config (Stocks)"):
+        d_id = st.text_input("Client ID", value=st.session_state.get("dhan_client_id", ""))
+        d_token = st.text_input("Access Token", value=st.session_state.get("dhan_token", ""), type="password")
+        if st.button("💾 Save Dhan Config"):
+            st.session_state["dhan_client_id"] = d_id
+            st.session_state["dhan_token"] = d_token
+            st.success("Saved!")
+
+    if "last_stock_page" not in st.session_state: st.session_state["last_stock_page"] = page_stocks
+    if "last_crypto_page" not in st.session_state: st.session_state["last_crypto_page"] = page_crypto
+    if "active_section" not in st.session_state: st.session_state["active_section"] = "crypto" # Default
+    
+    current_page = "AI Auto-Pilot" 
+    
+    if page_stocks != st.session_state["last_stock_page"]:
+        current_page = page_stocks
+        st.session_state["active_section"] = "stocks"
+        st.session_state["last_stock_page"] = page_stocks
+    elif page_crypto != st.session_state["last_crypto_page"]:
+        current_page = page_crypto
+        st.session_state["active_section"] = "crypto"
+        st.session_state["last_crypto_page"] = page_crypto
+    else:
+        if st.session_state.get("active_section") == "stocks":
+            current_page = page_stocks
+        else:
+            current_page = page_crypto
 
     if not st.session_state.get("loop_started", False):
         st.session_state["loop_started"] = True
-        t = threading.Thread(target=crypto.crypto_trading_loop, daemon=True)
-        add_script_run_ctx(t)
-        t.start()
+    if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
+        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        t_crypto.start()
+        st.session_state["crypto_loop_started"] = True
 
-    if st.session_state["mode"] == "stocks":
-        if page_stocks == "Bomb Stocks": stocks.run_stocks_app()
-        else: st.info("Stocks PNL Log Coming Soon")
-    else:
-        if page_crypto == "Crypto Auto Pilot": crypto.show_ai_autopilot_page()
-        elif page_crypto == "Crypto Report": crypto.show_crypto_report_page()
-        elif page_crypto == "Manual Bot": crypto.show_crypto_manual_bot_page()
+    if current_page == "AI Auto-Pilot":
+        show_ai_autopilot_page()
+    elif current_page == "Crypto Report":
+        show_crypto_report_page()
+    elif current_page == "Manual Bot":
+        show_crypto_manual_bot_page()
+    elif current_page == "Auto-Pilot App":
+        if STOCKS_MODULE_AVAILABLE: app1.run_stocks_app()
+        else: st.error("app1.py missing")
+    elif current_page == "Paper Trading":
+        show_paper_trading_page()
+    elif current_page == "PNL Log":
+        show_pnl_page()
 
 if __name__ == "__main__":
     main()
