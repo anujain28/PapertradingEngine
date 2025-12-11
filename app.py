@@ -751,7 +751,7 @@ def main():
     apply_custom_style()
     
     st.sidebar.title("💰 Paisa Banao")
-    st.sidebar.title("Navigation")
+    st.sidebar.title("Cypto Money Engine")
     
     st.sidebar.subheader("🪙 Crypto Menu")
     current_page = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
