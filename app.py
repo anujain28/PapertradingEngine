@@ -65,6 +65,9 @@ def apply_custom_style():
             color: #000000 !important;
             border: 1px solid #dee2e6;
         }
+        .main div[data-testid="stExpander"] div[role="group"] {
+            background-color: #ffffff !important;
+        }
         
         /* Force Tables/Dataframes inside Expander to be WHITE with BLACK TEXT */
         .main div[data-testid="stExpander"] div[data-testid="stDataFrame"] {
@@ -258,6 +261,177 @@ def init_db():
     conn.commit()
     conn.close()
 init_db()
+
+# ---------------------------
+# PAGE: MANUAL BOT (Restored)
+# ---------------------------
+def show_crypto_manual_bot_page():
+    st.title("🤖 AI Crypto Manual Bot")
+    st_autorefresh(interval=30_000, key="grid_refresh") 
+    usd_inr = st.session_state["usd_inr"]
+
+    st.subheader("🔎 Live Market Analysis (USDT)")
+    analysis_data = []
+    for coin in CRYPTO_SYMBOLS_USD:
+        hist = get_safe_crypto_data(coin, period="5d")
+        if hist is not None:
+            curr = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            change = ((curr - prev) / prev) * 100
+            rec = "HOLD"
+            if change > 3.0: rec = "SELL (Overbought)"
+            elif change < -3.0: rec = "BUY (Oversold)"
+            volatility = (hist['High'] - hist['Low']).mean() / curr * 100
+            analysis_data.append({
+                "Coin": coin.replace("-USD", ""),
+                "CMP (USDT)": f"${curr:,.2f}",
+                "24h Change %": f"{change:+.2f}%",
+                "Recommendation": rec,
+                "Vol. Score": f"{volatility:.1f}/10"
+            })
+    st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
+    st.markdown("---")
+
+    # Grid Config
+    st.subheader("⚙️ Configure Manual Bot")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
+        curr_price = get_current_price(selected_coin)
+        st.metric("Current Price", f"${curr_price:,.4f}")
+        st.caption(f"≈ ₹{curr_price * usd_inr:,.2f}")
+        
+        if st.button("🧠 Auto-Pick Settings"):
+            if curr_price > 0:
+                st.session_state['auto_lower'] = float(curr_price * 0.95)
+                st.session_state['auto_upper'] = float(curr_price * 1.05)
+                st.session_state['auto_grids'] = 5
+                st.session_state['auto_tp'] = 2.0
+                st.session_state['auto_sl'] = 3.0
+                st.session_state['auto_inv'] = 100.0
+                st.success("Loaded!")
+
+    with c2:
+        col_a, col_b = st.columns(2)
+        lower_p = col_a.number_input("Lower Price", value=st.session_state.get('auto_lower', 0.0), format="%.4f")
+        upper_p = col_b.number_input("Upper Price", value=st.session_state.get('auto_upper', 0.0), format="%.4f")
+        col_c, col_d = st.columns(2)
+        grids = col_c.number_input("Grids", min_value=2, max_value=20, value=st.session_state.get('auto_grids', 5))
+        invest = col_d.number_input("Investment", value=st.session_state.get('auto_inv', 100.0))
+        col_e, col_f = st.columns(2)
+        tp_pct = col_e.number_input("TP (%)", value=st.session_state.get('auto_tp', 2.0))
+        sl_pct = col_f.number_input("SL (%)", value=st.session_state.get('auto_sl', 3.0))
+
+    if st.button("▶️ Start Manual Bot"):
+        if curr_price > 0 and lower_p < upper_p:
+            bot_id = selected_coin
+            entry_qty = invest / curr_price
+            st.session_state["grid_bot_active"][bot_id] = {
+                "coin": selected_coin, "entry_price": curr_price,
+                "lower": lower_p, "upper": upper_p, "grids": grids,
+                "qty": entry_qty, "invest": invest, "tp": tp_pct, "sl": sl_pct,
+                "status": "Running", "start_time": dt.datetime.now().strftime("%H:%M:%S")
+            }
+            st.success("Bot Started!")
+
+    # Active Bots
+    st.markdown("---")
+    st.subheader("📍 Active Manual Bots")
+    active_bots = st.session_state["grid_bot_active"]
+    if active_bots:
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([1,1,1,2,2,2,1])
+        h1.write("**Coin**"); h2.write("**Entry**"); h3.write("**CMP**"); 
+        h4.write("**Inv (USD/INR)**"); h5.write("**PnL (USD/INR)**"); h6.write("**Status**"); h7.write("**Action**")
+        
+        for b_id, data in list(active_bots.items()):
+            cp = get_current_price(data['coin'])
+            current_val_usd = data['qty'] * cp
+            pnl_usd = current_val_usd - data['invest']
+            pnl_inr = pnl_usd * usd_inr
+            inv_inr = data['invest'] * usd_inr
+            pnl_pct = (pnl_usd / data['invest']) * 100
+            
+            status_text = "🟢 Running"
+            if pnl_pct >= data['tp']: status_text = "✅ TP HIT"
+            elif pnl_pct <= -data['sl']: status_text = "❌ SL HIT"
+
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1,1,1,2,2,2,1])
+            c1.write(data['coin'].replace("-USD",""))
+            c2.write(f"${data['entry_price']:.4f}")
+            c3.write(f"${cp:.4f}")
+            c4.write(f"${data['invest']:.0f} / ₹{inv_inr:,.0f}")
+            pnl_color = "green" if pnl_usd >= 0 else "red"
+            c5.markdown(f":{pnl_color}[${pnl_usd:.2f} / ₹{pnl_inr:,.0f}]")
+            c6.write(status_text)
+            
+            if c7.button("Stop", key=f"stop_{b_id}"):
+                final_val_inr = inv_inr + pnl_inr
+                msg = (f"🚨 *Manual Crypto Trade Closed*\n"
+                       f"Asset: {data['coin']}\n"
+                       f"💰 Invested: ₹{inv_inr:,.2f}\n"
+                       f"💵 Final Value: ₹{final_val_inr:,.2f}\n"
+                       f"📈 PnL: ₹{pnl_inr:,.2f} ({pnl_pct:.2f}%)")
+                send_telegram_alert(msg)
+                
+                del st.session_state["grid_bot_active"][b_id]
+                st.rerun()
+    else:
+        st.info("No active manual bots.")
+        
+    st.markdown("---")
+    st.subheader(f"📉 Asset Price Chart: {selected_coin}")
+    t_col1, t_col2 = st.columns([3, 1])
+    with t_col1:
+        time_range = st.radio("Select Timeframe", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "ytd", "max"], index=2, horizontal=True)
+    chart_data = get_safe_crypto_data(selected_coin, period=time_range)
+    if chart_data is not None:
+        fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
+        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='black', paper_bgcolor='black', xaxis=dict(showgrid=True, gridcolor='#333', color='white'), yaxis=dict(showgrid=True, gridcolor='#333', color='white'), font=dict(color='white'))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("Chart data unavailable.")
+
+# ---------------------------
+# PAGE: REPORT (Restored)
+# ---------------------------
+def show_crypto_report_page():
+    st.title("📑 Crypto PnL Report")
+    ap = st.session_state["autopilot"]
+    usd_inr = st.session_state["usd_inr"]
+    
+    st_autorefresh(interval=30_000, key="report_refresh")
+
+    st.subheader("🔴 Live Portfolio")
+    running_inv = sum([g.get('invest', 0.0) for g in ap['active_grids']])
+    running_val = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
+    
+    total_exp_profit = sum([g.get('expected_profit', 0.0) for g in ap['active_grids']])
+    total_exp_loss = sum([g.get('expected_loss', 0.0) for g in ap['active_grids']])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Live Invested", f"₹{running_inv * usd_inr:,.0f}")
+    c2.metric("Live Value", f"₹{running_val * usd_inr:,.0f}")
+    c3.metric("Live PnL", f"₹{(running_val - running_inv) * usd_inr:,.0f}")
+
+    c4, c5 = st.columns(2)
+    c4.metric("📈 Total Expected Profit", f"₹{total_exp_profit * usd_inr:,.0f} (${total_exp_profit:.2f})")
+    c5.metric("📉 Total Expected Loss (Risk)", f"₹{total_exp_loss * usd_inr:,.0f} (${total_exp_loss:.2f})")
+    
+    st.markdown("---")
+    st.subheader("🏁 Closed Trades")
+    if ap["history"]:
+        df = pd.DataFrame(ap["history"])
+        df['date'] = pd.to_datetime(df['date'])
+        total_profit = df['pnl'].sum()
+        m1, m2 = st.columns(2)
+        m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
+        m2.metric("Trades", len(df))
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
+    else:
+        st.info("No closed trades.")
 
 # ---------------------------
 # PAGE: AI AUTO-PILOT
@@ -494,15 +668,8 @@ def main():
         st.session_state["crypto_loop_started"] = True
 
     if current_page == "AI Auto-Pilot": show_ai_autopilot_page()
-    elif current_page == "Crypto Report": 
-        # Placeholder for report page
-        st.title("Report")
-        st.write("Use Main Page for details")
+    elif current_page == "Crypto Report": show_crypto_report_page()
     elif current_page == "Manual Bot": show_crypto_manual_bot_page()
-
-def show_crypto_manual_bot_page():
-    st.title("Manual Bot")
-    st.write("Use AI Auto-Pilot for smart trading.")
 
 if __name__ == "__main__":
     main()
