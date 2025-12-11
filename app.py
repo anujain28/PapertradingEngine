@@ -38,25 +38,69 @@ except ImportError:
 # ---------------------------
 USER_CREDENTIALS = {
     "username": "admin",
-    "password": "admin" 
+    "password": "admin"
 }
 
 # ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
 # ---------------------------
-st.set_page_config(page_title="AI Crypto Engine", layout="wide", page_icon="🔐")
+st.set_page_config(page_title="AI Crypto Engine", layout="wide", page_icon="📈")
 
 def apply_custom_style():
     st.markdown("""
         <style>
+        /* Global App Background */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li, td, th { color: #000000 !important; }
+        
+        /* Sidebar Styling */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
-        input { background-color: #000000 !important; color: white !important; border: 1px solid #555 !important; }
-        .main div[data-testid="stExpander"] details summary { background-color: #f0f2f6 !important; color: black !important; border: 1px solid #ddd; }
-        .main div[data-testid="stExpander"] div[role="group"] { background-color: white !important; }
-        div[data-testid="stDataFrame"] { background-color: white !important; }
-        div[data-testid="stDataFrame"] * { color: black !important; }
+        section[data-testid="stSidebar"] input { 
+            background-color: #000000 !important; 
+            color: #ffffff !important; 
+            border: 1px solid #666 !important;
+        }
+        
+        /* Main Page Inputs */
+        .main input { 
+            background-color: #ffffff !important; 
+            color: #000000 !important; 
+            border: 1px solid #ccc !important; 
+        }
+        
+        /* Expanders & Dataframes */
+        .main div[data-testid="stExpander"] details summary { 
+            background-color: #f0f2f6 !important; 
+            color: #000000 !important; 
+            border: 1px solid #dee2e6; 
+        }
+        .main div[data-testid="stExpander"] div[role="group"] { 
+            background-color: #ffffff !important; 
+        }
+        div[data-testid="stDataFrame"] { 
+            background-color: #ffffff !important; 
+        }
+        div[data-testid="stDataFrame"] * { 
+            color: #000000 !important; 
+        }
+        
+        /* Metrics Box */
+        div[data-testid="metric-container"] {
+            background-color: #f8f9fa !important;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            color: #000000 !important;
+        }
+        div[data-testid="metric-container"] label { color: #555 !important; }
+        
+        /* Buttons */
+        .stButton > button {
+            background-color: #e5e7eb !important;
+            color: black !important;
+            border: 1px solid #9ca3af !important;
+        }
         </style>
         """, unsafe_allow_html=True)
 
@@ -83,7 +127,10 @@ class SharedEngineState:
             "history": [],
             "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
         }
+        # Manual Bot State
         self.grid_bot_active = {}
+        
+        # Configs
         self.gemini_api_key = ""
         self.last_gemini_usage = None
         self.tg_token = ""
@@ -216,10 +263,11 @@ def init_db():
     conn.close()
 
 def engine_background_logic():
+    """Runs permanently in the background."""
     while True:
+        # 1. AI AUTO-PILOT LOGIC
         ap = ENGINE.autopilot
         if ap["running"]:
-            # Exit Logic
             for i in range(len(ap['active_grids']) - 1, -1, -1):
                 g = ap['active_grids'][i]
                 cp = get_current_price(g['coin'])
@@ -232,7 +280,26 @@ def engine_background_logic():
                 if close:
                     ap['cash_balance'] += (g['qty'] * cp)
                     ap['active_grids'].pop(i)
+                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": (g['qty'] * cp) - g['invest'], "invested": g['invest'], "return_pct": pnl_pct})
                     send_telegram_alert(f"🚨 Engine Closed {g['coin']} at {pnl_pct:.2f}%")
+
+        # 2. MANUAL BOT LOGIC
+        manual_bots = ENGINE.grid_bot_active
+        for b_id, data in list(manual_bots.items()):
+            cp = get_current_price(data['coin'])
+            current_val_usd = data['qty'] * cp
+            pnl_usd = current_val_usd - data['invest']
+            pnl_pct = (pnl_usd / data['invest']) * 100
+            
+            close = False
+            if pnl_pct >= data['tp']: close = True
+            elif pnl_pct <= -data['sl']: close = True
+            
+            if close:
+                # Add to history if we want (optional for manual)
+                send_telegram_alert(f"🚨 Manual Bot Closed {data['coin']} at {pnl_pct:.2f}%")
+                del manual_bots[b_id]
+
         time.sleep(60)
 
 @st.cache_resource
@@ -245,7 +312,7 @@ def start_background_thread():
 # PAGES
 # ---------------------------
 def show_login_page():
-    st.markdown("<h1 style='text-align: center;'>🔐 Secure Engine Login</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color:black;'>🔐 Secure Engine Login</h1>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
@@ -263,13 +330,11 @@ def show_login_page():
 
 def show_ai_autopilot_page(usd_inr):
     ap = ENGINE.autopilot
-    st.title(f"🚀 AI Auto-Pilot")
+    st.title("🚀 AI Auto-Pilot")
     
-    is_gemini_restricted = not check_gemini_eligibility()
-    if ENGINE.gemini_api_key and not is_gemini_restricted:
+    # Engine Status
+    if ENGINE.gemini_api_key and check_gemini_eligibility():
         st.caption("✨ Powered by Gemini 3 Intelligent Engine")
-    elif is_gemini_restricted:
-        st.caption("⚙️ Gemini Engine Cooldown (Running Technical Backup)")
     else:
         st.caption("⚙️ Running on Standard Technical Engine")
 
@@ -301,6 +366,7 @@ def show_ai_autopilot_page(usd_inr):
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
+        # Calculate Metrics
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         grid_current_val = 0.0
         for g in ap['active_grids']:
@@ -318,7 +384,7 @@ def show_ai_autopilot_page(usd_inr):
         
         st.markdown("---")
         
-        # 1. AI ENTRY LOGIC (Frontend View)
+        # 1. SCANNER ENTRY LOGIC (Frontend View)
         scan_data = []
         for coin in CRYPTO_SYMBOLS_USD:
             cp = get_current_price(coin)
@@ -338,6 +404,7 @@ def show_ai_autopilot_page(usd_inr):
                 "Status": status_msg
             })
             
+        # Trigger Buy if valid (Simulated here for immediate feedback)
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             best_score = -100; best_coin = None; best_reason = ""
             for coin in CRYPTO_SYMBOLS_USD:
@@ -351,16 +418,13 @@ def show_ai_autopilot_page(usd_inr):
                 if cp > 0:
                     alloc = 0.4 if best_score >= 8 else 0.2
                     invest_amt = min(ap['cash_balance'] * alloc, ap['cash_balance'] * 0.5)
-                    
                     hist = get_safe_crypto_data(best_coin, period="5d")
                     vol_pct = 0.05
                     if hist is not None:
                          vol_pct = max(0.03, ((hist['High'] - hist['Low']) / hist['Close']).mean() * 1.5)
 
-                    lower = cp * (1 - vol_pct)
-                    upper = cp * (1 + vol_pct)
-                    tp_t = round(vol_pct * 100 * 0.8, 2)
-                    sl_t = round(vol_pct * 100 * 0.5, 2)
+                    lower = cp * (1 - vol_pct); upper = cp * (1 + vol_pct)
+                    tp_t = round(vol_pct * 100 * 0.8, 2); sl_t = round(vol_pct * 100 * 0.5, 2)
                     grid_count = max(3, min(10, int(invest_amt / 15)))
 
                     grid_orders = []
@@ -452,19 +516,81 @@ def show_ai_autopilot_page(usd_inr):
 
 def show_crypto_manual_bot_page(usd_inr):
     st.title("🤖 AI Crypto Manual Bot")
-    st.info("Manual Trading is available for advanced users.")
-    # (Restoring previous manual logic if needed, simplifed here for brevity)
-    st.write("Use the controls below to start a manual grid.")
-    # ... (Manual controls can be re-added here if requested)
+    st_autorefresh(interval=30_000, key="grid_refresh")
+    
+    st.subheader("🔎 Live Market Analysis (USDT)")
+    analysis_data = []
+    for coin in CRYPTO_SYMBOLS_USD:
+        cp = get_current_price(coin)
+        analysis_data.append({"Coin": coin, "Price": f"${cp:.2f}"})
+    st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
+    st.markdown("---")
+
+    # Manual Config
+    st.subheader("⚙️ Configure Manual Bot")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        selected_coin = st.selectbox("Select Coin", CRYPTO_SYMBOLS_USD, key="bot_coin_select")
+        curr_price = get_current_price(selected_coin)
+        st.metric("Current Price", f"${curr_price:,.4f}")
+        
+    with c2:
+        col_a, col_b = st.columns(2)
+        lower_p = col_a.number_input("Lower Price", value=curr_price*0.95)
+        upper_p = col_b.number_input("Upper Price", value=curr_price*1.05)
+        col_c, col_d = st.columns(2)
+        grids = col_c.number_input("Grids", min_value=2, max_value=20, value=5)
+        invest = col_d.number_input("Investment ($)", value=100.0)
+        col_e, col_f = st.columns(2)
+        tp_pct = col_e.number_input("TP (%)", value=2.0)
+        sl_pct = col_f.number_input("SL (%)", value=3.0)
+
+    if st.button("▶️ Start Manual Bot"):
+        if curr_price > 0:
+            bot_id = selected_coin
+            entry_qty = invest / curr_price
+            ENGINE.grid_bot_active[bot_id] = {
+                "coin": selected_coin, "entry_price": curr_price,
+                "lower": lower_p, "upper": upper_p, "grids": grids,
+                "qty": entry_qty, "invest": invest, "tp": tp_pct, "sl": sl_pct,
+                "status": "Running", "start_time": dt.datetime.now().strftime("%H:%M:%S")
+            }
+            st.success("Bot Started!")
+
+    st.markdown("---")
+    st.subheader("📍 Active Manual Bots")
+    active_bots = ENGINE.grid_bot_active
+    if active_bots:
+        h1, h2, h3, h4, h5, h6 = st.columns([1,1,1,2,2,1])
+        h1.write("**Coin**"); h2.write("**Entry**"); h3.write("**CMP**"); 
+        h4.write("**Inv**"); h5.write("**PnL**"); h6.write("**Action**")
+        
+        for b_id, data in list(active_bots.items()):
+            cp = get_current_price(data['coin'])
+            current_val_usd = data['qty'] * cp
+            pnl_usd = current_val_usd - data['invest']
+            pnl_pct = (pnl_usd / data['invest']) * 100
+            
+            c1, c2, c3, c4, c5, c6 = st.columns([1,1,1,2,2,1])
+            c1.write(data['coin'])
+            c2.write(f"${data['entry_price']:.2f}")
+            c3.write(f"${cp:.2f}")
+            c4.write(f"${data['invest']:.0f}")
+            c5.markdown(f":{'green' if pnl_usd>=0 else 'red'}[${pnl_usd:.2f}]")
+            if c6.button("Stop", key=f"stop_{b_id}"):
+                del ENGINE.grid_bot_active[b_id]
+                st.rerun()
+    else:
+        st.info("No active manual bots.")
 
 def show_crypto_report_page(usd_inr):
     st.title("📑 Crypto PnL Report")
     ap = ENGINE.autopilot
-    st_autorefresh(interval=30_000, key="report_refresh")
     
     total_profit = sum([t['pnl'] for t in ap['history']])
     st.metric("Total Realized PnL", f"${total_profit:.2f}")
     
+    st.subheader("🏁 Closed Trades")
     if ap["history"]:
         df = pd.DataFrame(ap["history"])
         df['date'] = pd.to_datetime(df['date'])
