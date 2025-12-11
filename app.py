@@ -50,11 +50,11 @@ st.set_page_config(page_title="AI Crypto Engine", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* Global App Background: White */
+        /* Global App Background */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li, td, th { color: #000000 !important; }
         
-        /* Sidebar Styling (Dark) */
+        /* Sidebar Styling */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         section[data-testid="stSidebar"] input { 
@@ -63,25 +63,31 @@ def apply_custom_style():
             border: 1px solid #666 !important;
         }
         
-        /* --- TABLE/DATAFRAME STYLING (BLACK BG, WHITE FONT) --- */
+        /* Main Page Inputs */
+        .main input { 
+            background-color: #ffffff !important; 
+            color: #000000 !important; 
+            border: 1px solid #ccc !important; 
+        }
+        
+        /* Expanders & Dataframes */
+        .main div[data-testid="stExpander"] details summary { 
+            background-color: #f0f2f6 !important; 
+            color: #000000 !important; 
+            border: 1px solid #dee2e6; 
+        }
+        .main div[data-testid="stExpander"] div[role="group"] { 
+            background-color: #ffffff !important; 
+        }
         div[data-testid="stDataFrame"] { 
             background-color: #333333 !important; 
         }
-        /* Target headers, rows, and text inside DataFrames/Tables */
-        .main div[data-testid="stExpander"] div[data-testid="stDataFrame"] *,
-        .main div[data-testid="stDataFrame"] *,
+        div[data-testid="stDataFrame"] *,
         .main table,
         .main th,
         .main td {
             color: #ffffff !important;
             background-color: #333333 !important;
-        }
-
-        /* Main Page Inputs (White BG, Black Text) */
-        .main input { 
-            background-color: #ffffff !important; 
-            color: #000000 !important; 
-            border: 1px solid #ccc !important; 
         }
         
         /* Metrics Box */
@@ -90,6 +96,7 @@ def apply_custom_style():
             border: 1px solid #dee2e6;
             color: #000000 !important;
         }
+        div[data-testid="metric-container"] label { color: #555 !important; }
         
         /* Buttons */
         .stButton > button {
@@ -97,6 +104,9 @@ def apply_custom_style():
             color: black !important;
             border: 1px solid #9ca3af !important;
         }
+        
+        /* Plotly Charts: Ensure text/grid is visible (White) */
+        .js-plotly-plot .plotly .modebar { display: none !important; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -409,7 +419,7 @@ def show_ai_autopilot_page(usd_inr):
                 if score > best_score:
                     best_score = score; best_coin = coin; best_reason = reason
             
-            if best_coin and best_score >= 2:
+            if best_coin and best_score >= 5:
                 cp = get_current_price(best_coin)
                 if cp > 0:
                     alloc = 0.4 if best_score >= 8 else 0.2
@@ -625,7 +635,7 @@ def show_crypto_report_page(usd_inr):
         df['cumulative_pnl'] = df['pnl'].cumsum()
         
         fig = px.line(df, x='date', y='cumulative_pnl', markers=True, title="Cumulative PnL Over Time")
-        # Ensure charts have black font on black background
+        # PLOTLY THEME: Dark Theme for visual consistency with table
         fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)", plot_bgcolor='#333', paper_bgcolor='#333', font=dict(color='white'))
         st.plotly_chart(fig, use_container_width=True)
     else:
