@@ -50,11 +50,11 @@ st.set_page_config(page_title="AI Crypto Engine", layout="wide", page_icon="📈
 def apply_custom_style():
     st.markdown("""
         <style>
-        /* Global App Background */
+        /* Global App Background: White */
         .stApp { background-color: #ffffff !important; color: #000000 !important; }
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li, td, th { color: #000000 !important; }
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li { color: #000000 !important; }
         
-        /* Sidebar Styling */
+        /* Sidebar Styling (Dark) */
         section[data-testid="stSidebar"] { background-color: #262730 !important; color: white !important; }
         section[data-testid="stSidebar"] * { color: white !important; }
         section[data-testid="stSidebar"] input { 
@@ -63,39 +63,33 @@ def apply_custom_style():
             border: 1px solid #666 !important;
         }
         
-        /* Main Page Inputs (Ensuring they are white/black too) */
+        /* --- TABLE/DATAFRAME STYLING (BLACK BG, WHITE FONT) --- */
+        div[data-testid="stDataFrame"] { 
+            background-color: #333333 !important; 
+        }
+        /* Target headers, rows, and text inside DataFrames/Tables */
+        .main div[data-testid="stExpander"] div[data-testid="stDataFrame"] *,
+        .main div[data-testid="stDataFrame"] *,
+        .main table,
+        .main th,
+        .main td {
+            color: #ffffff !important;
+            background-color: #333333 !important;
+        }
+
+        /* Main Page Inputs (White BG, Black Text) */
         .main input { 
             background-color: #ffffff !important; 
             color: #000000 !important; 
             border: 1px solid #ccc !important; 
         }
         
-        /* Expanders & Dataframes */
-        .main div[data-testid="stExpander"] details summary { 
-            background-color: #f0f2f6 !important; 
-            color: #000000 !important; 
-            border: 1px solid #dee2e6; 
-        }
-        .main div[data-testid="stExpander"] div[role="group"] { 
-            background-color: #ffffff !important; 
-        }
-        div[data-testid="stDataFrame"] { 
-            background-color: #ffffff !important; 
-        }
-        div[data-testid="stDataFrame"] * { 
-            color: #000000 !important; 
-            background-color: #ffffff !important; /* Ensure table cells are white */
-        }
-        
         /* Metrics Box */
         div[data-testid="metric-container"] {
             background-color: #f8f9fa !important;
             border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 15px;
             color: #000000 !important;
         }
-        div[data-testid="metric-container"] label { color: #555 !important; }
         
         /* Buttons */
         .stButton > button {
@@ -595,8 +589,8 @@ def show_crypto_manual_bot_page(usd_inr):
     chart_data = get_safe_crypto_data(selected_coin, period=time_range)
     if chart_data is not None:
         fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
-        # Force White Background Theme
-        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='white', paper_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#eee', color='black'), yaxis=dict(showgrid=True, gridcolor='#eee', color='black'), font=dict(color='black'))
+        # PLOTLY THEME: Dark Theme for visual consistency with table
+        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='#333', paper_bgcolor='#333', xaxis=dict(showgrid=True, gridcolor='#555', color='white'), yaxis=dict(showgrid=True, gridcolor='#555', color='white'), font=dict(color='white'))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.error("Chart data unavailable.")
@@ -631,8 +625,8 @@ def show_crypto_report_page(usd_inr):
         df['cumulative_pnl'] = df['pnl'].cumsum()
         
         fig = px.line(df, x='date', y='cumulative_pnl', markers=True, title="Cumulative PnL Over Time")
-        # Ensure charts have black font on white background
-        fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)", plot_bgcolor='white', paper_bgcolor='white', font=dict(color='black'))
+        # Ensure charts have black font on black background
+        fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)", plot_bgcolor='#333', paper_bgcolor='#333', font=dict(color='white'))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No closed trades to chart yet.")
