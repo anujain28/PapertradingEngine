@@ -334,10 +334,10 @@ def show_login_page():
 
 def show_ai_autopilot_page(usd_inr):
     ap = ENGINE.autopilot
-    st.title("🚀 AI Auto-Pilot")
+    st.title(f"🚀 AI Auto-Pilot")
     
-    # Engine Status
-    if ENGINE.gemini_api_key and check_gemini_eligibility():
+    is_gemini_restricted = not check_gemini_eligibility()
+    if ENGINE.gemini_api_key and not is_gemini_restricted:
         st.caption("✨ Powered by Gemini 3 Intelligent Engine")
     else:
         st.caption("⚙️ Running on Standard Technical Engine")
@@ -370,7 +370,6 @@ def show_ai_autopilot_page(usd_inr):
         curr_sym = "$" if ap["currency"] == "USDT" else "₹"
         conv_factor = 1.0 if ap["currency"] == "USDT" else usd_inr
         
-        # Calculate Metrics
         invested_in_grids = sum([g.get('invest', 0.0) for g in ap['active_grids']])
         grid_current_val = 0.0
         for g in ap['active_grids']:
@@ -520,13 +519,12 @@ def show_ai_autopilot_page(usd_inr):
 
 def show_crypto_manual_bot_page(usd_inr):
     st.title("🤖 AI Crypto Manual Bot")
-    st_autorefresh(interval=30_000, key="grid_refresh")
+    st.autorefresh(interval=30_000, key="grid_refresh")
     
     st.subheader("🔎 Live Market Analysis (USDT)")
     analysis_data = []
     for coin in CRYPTO_SYMBOLS_USD:
         cp = get_current_price(coin)
-        # Use safe chart fetch for volatility/change if needed, or simple price for now
         analysis_data.append({"Coin": coin, "Price": f"${cp:.2f}"})
     st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
     st.markdown("---")
