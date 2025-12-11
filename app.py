@@ -278,7 +278,13 @@ def engine_background_logic():
                 if close:
                     ap['cash_balance'] += (g['qty'] * cp)
                     ap['active_grids'].pop(i)
-                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": (g['qty'] * cp) - g['invest'], "invested": g['invest'], "return_pct": pnl_pct})
+                    ap['history'].append({
+                        "date": dt.datetime.now(IST), 
+                        "coin": g['coin'],
+                        "pnl": (g['qty'] * cp) - g['invest'], 
+                        "invested": g['invest'], 
+                        "return_pct": pnl_pct
+                    })
                     send_telegram_alert(f"🚨 Engine Closed {g['coin']} at {pnl_pct:.2f}%")
 
         # 2. MANUAL BOT LOGIC
@@ -577,7 +583,7 @@ def show_crypto_manual_bot_page(usd_inr):
                 st.rerun()
     else:
         st.info("No active manual bots.")
-    
+
     # --- CHART RESTORED ---
     st.markdown("---")
     st.subheader(f"📉 Asset Price Chart: {selected_coin}")
@@ -588,7 +594,6 @@ def show_crypto_manual_bot_page(usd_inr):
     chart_data = get_safe_crypto_data(selected_coin, period=time_range)
     if chart_data is not None:
         fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
-        # Force White Background Theme
         fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='white', paper_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#eee', color='black'), yaxis=dict(showgrid=True, gridcolor='#eee', color='black'), font=dict(color='black'))
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -599,11 +604,23 @@ def show_crypto_report_page(usd_inr):
     ap = ENGINE.autopilot
     st_autorefresh(interval=30_000, key="report_refresh")
     
-    # 1. METRICS
-    total_profit = sum([t.get('pnl', 0) for t in ap['history']])
-    st.metric("💰 Total Realized PnL", f"${total_profit:,.2f}", help="Total profit from closed trades")
+    # 1. CALCULATIONS
+    total_realized_profit = sum([t.get('pnl', 0) for t in ap['history']])
+    current_running_value = sum([(g['qty'] * get_current_price(g['coin'])) for g in ap['active_grids']])
     
-    # 2. CHART (PnL Growth)
+    # Total Equity is Cash + Running Value
+    current_equity = ap['cash_balance'] + current_running_value
+    net_return_pct = ((current_equity - ap['total_capital']) / ap['total_capital']) * 100 if ap['total_capital'] > 0 else 0
+    
+    # 2. METRICS
+    st.subheader("📊 Performance Overview")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Initial Capital", f"${ap['total_capital']:,.0f}")
+    c2.metric("Total Equity (Live)", f"${current_equity:,.2f}", delta=f"{net_return_pct:+.2f}%")
+    c3.metric("Total Realized PnL", f"${total_realized_profit:,.2f}", help="Profit/Loss from closed trades.")
+    c4.metric("Trades Executed", len(ap['history']))
+
+    # 3. CHART (PnL Growth)
     st.subheader("📈 Profit Growth")
     if ap["history"]:
         df = pd.DataFrame(ap["history"])
@@ -617,12 +634,12 @@ def show_crypto_report_page(usd_inr):
     else:
         st.info("No closed trades to chart yet.")
 
-    # 3. DETAILED TABLE
-    st.subheader("📋 Trade History")
+    # 4. DETAILED TABLE
+    st.subheader("📋 Closed Trade History")
     if ap["history"]:
         df_display = pd.DataFrame(ap["history"])
         df_display['date'] = pd.to_datetime(df_display['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
-        st.dataframe(df_display.sort_values('date', ascending=False), use_container_width=True)
+        st.dataframe(df_display[['date', 'coin', 'pnl', 'invested', 'return_pct']].sort_values('date', ascending=False), use_container_width=True)
     else:
         st.info("No history available.")
 
