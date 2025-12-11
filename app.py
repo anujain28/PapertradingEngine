@@ -683,7 +683,6 @@ def show_ai_autopilot_page():
             pnl_col = "green" if sum_pnl >= 0 else "red"
             f7.markdown(f":{pnl_col}[**${sum_pnl:,.2f}**]")
 
-            # --- GRID DETAILS SECTION ADDED BACK HERE ---
             st.markdown("---")
             st.markdown("### 📋 AI Grid Orders")
             for g in ap['active_grids']:
@@ -694,7 +693,6 @@ def show_ai_autopilot_page():
                         st.table(ord_df)
                     else:
                         st.write("Generating orders...")
-            # --------------------------------------------
 
         else:
             st.info("AI Scanner Active: Waiting for optimal setup...")
@@ -738,4 +736,57 @@ def show_crypto_report_page():
         total_profit = df['pnl'].sum()
         m1, m2 = st.columns(2)
         m1.metric("Realized PnL", f"${total_profit:,.2f} (₹{total_profit*usd_inr:,.0f})")
-        m2.metric("Trades", len
+        m2.metric("Trades", len(df))
+        
+        display_df = df.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S IST')
+        st.dataframe(display_df.sort_values('date', ascending=False), use_container_width=True)
+    else:
+        st.info("No closed trades.")
+
+# ---------------------------
+# MAIN EXECUTION
+# ---------------------------
+def main():
+    apply_custom_style()
+    
+    st.sidebar.title("💰 Paisa Banao")
+    st.sidebar.title("Navigation")
+    
+    st.sidebar.subheader("🪙 Crypto Menu")
+    current_page = st.sidebar.radio("Crypto Actions", ["AI Auto-Pilot", "Crypto Report", "Manual Bot"], label_visibility="collapsed")
+    
+    st.sidebar.markdown("---")
+    
+    # 1. Telegram Config
+    with st.sidebar.expander("📢 Telegram Alerts"):
+        tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+        tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat_id", ""))
+        if st.button("💾 Save Telegram Config"):
+            st.session_state["tg_token"] = tg_token
+            st.session_state["tg_chat_id"] = tg_chat
+            st.success("Saved!")
+
+    # 2. Binance Config
+    with st.sidebar.expander("🔌 Binance Keys"):
+        api = st.text_input("API Key", value=st.session_state.get("binance_api", "") or "", type="password")
+        sec = st.text_input("Secret Key", value=st.session_state.get("binance_secret", "") or "", type="password")
+        if st.button("💾 Save Binance Keys"):
+            st.session_state["binance_api"] = api
+            st.session_state["binance_secret"] = sec
+            st.success("Saved!")
+    
+    if CRYPTO_BOT_AVAILABLE and not st.session_state.get("crypto_loop_started", False):
+        t_crypto = threading.Thread(target=crypto_trading_loop, daemon=True)
+        t_crypto.start()
+        st.session_state["crypto_loop_started"] = True
+
+    if current_page == "AI Auto-Pilot":
+        show_ai_autopilot_page()
+    elif current_page == "Crypto Report":
+        show_crypto_report_page()
+    elif current_page == "Manual Bot":
+        show_crypto_manual_bot_page()
+
+if __name__ == "__main__":
+    main()
