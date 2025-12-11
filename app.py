@@ -278,14 +278,7 @@ def engine_background_logic():
                 if close:
                     ap['cash_balance'] += (g['qty'] * cp)
                     ap['active_grids'].pop(i)
-                    # Log PnL to history
-                    ap['history'].append({
-                        "date": dt.datetime.now(IST), 
-                        "coin": g['coin'],
-                        "pnl": (g['qty'] * cp) - g['invest'], 
-                        "invested": g['invest'], 
-                        "return_pct": pnl_pct
-                    })
+                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": (g['qty'] * cp) - g['invest'], "invested": g['invest'], "return_pct": pnl_pct})
                     send_telegram_alert(f"🚨 Engine Closed {g['coin']} at {pnl_pct:.2f}%")
 
         # 2. MANUAL BOT LOGIC
@@ -584,6 +577,22 @@ def show_crypto_manual_bot_page(usd_inr):
                 st.rerun()
     else:
         st.info("No active manual bots.")
+    
+    # --- CHART RESTORED ---
+    st.markdown("---")
+    st.subheader(f"📉 Asset Price Chart: {selected_coin}")
+    t_col1, t_col2 = st.columns([3, 1])
+    with t_col1:
+        time_range = st.radio("Select Timeframe", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "ytd", "max"], index=2, horizontal=True)
+    
+    chart_data = get_safe_crypto_data(selected_coin, period=time_range)
+    if chart_data is not None:
+        fig = go.Figure(data=[go.Candlestick(x=chart_data.index, open=chart_data['Open'], high=chart_data['High'], low=chart_data['Low'], close=chart_data['Close'])])
+        # Force White Background Theme
+        fig.update_layout(height=500, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='white', paper_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#eee', color='black'), yaxis=dict(showgrid=True, gridcolor='#eee', color='black'), font=dict(color='black'))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("Chart data unavailable.")
 
 def show_crypto_report_page(usd_inr):
     st.title("📑 Crypto PnL Report")
@@ -603,7 +612,7 @@ def show_crypto_report_page(usd_inr):
         df['cumulative_pnl'] = df['pnl'].cumsum()
         
         fig = px.line(df, x='date', y='cumulative_pnl', markers=True, title="Cumulative PnL Over Time")
-        fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)")
+        fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)", plot_bgcolor='white', paper_bgcolor='white', font=dict(color='black'))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No closed trades to chart yet.")
