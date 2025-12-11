@@ -15,6 +15,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import yfinance as yf
 import plotly.graph_objects as go
+import plotly.express as px
 
 # --- IMPORT GOOGLE GEMINI ---
 try:
@@ -127,10 +128,7 @@ class SharedEngineState:
             "history": [],
             "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
         }
-        # Manual Bot State
         self.grid_bot_active = {}
-        
-        # Configs
         self.gemini_api_key = ""
         self.last_gemini_usage = None
         self.tg_token = ""
@@ -280,7 +278,14 @@ def engine_background_logic():
                 if close:
                     ap['cash_balance'] += (g['qty'] * cp)
                     ap['active_grids'].pop(i)
-                    ap['history'].append({"date": dt.datetime.now(IST), "pnl": (g['qty'] * cp) - g['invest'], "invested": g['invest'], "return_pct": pnl_pct})
+                    # Log PnL to history
+                    ap['history'].append({
+                        "date": dt.datetime.now(IST), 
+                        "coin": g['coin'],
+                        "pnl": (g['qty'] * cp) - g['invest'], 
+                        "invested": g['invest'], 
+                        "return_pct": pnl_pct
+                    })
                     send_telegram_alert(f"🚨 Engine Closed {g['coin']} at {pnl_pct:.2f}%")
 
         # 2. MANUAL BOT LOGIC
@@ -296,7 +301,6 @@ def engine_background_logic():
             elif pnl_pct <= -data['sl']: close = True
             
             if close:
-                # Add to history if we want (optional for manual)
                 send_telegram_alert(f"🚨 Manual Bot Closed {data['coin']} at {pnl_pct:.2f}%")
                 del manual_bots[b_id]
 
@@ -522,6 +526,7 @@ def show_crypto_manual_bot_page(usd_inr):
     analysis_data = []
     for coin in CRYPTO_SYMBOLS_USD:
         cp = get_current_price(coin)
+        # Use safe chart fetch for volatility/change if needed, or simple price for now
         analysis_data.append({"Coin": coin, "Price": f"${cp:.2f}"})
     st.dataframe(pd.DataFrame(analysis_data), use_container_width=True)
     st.markdown("---")
@@ -586,17 +591,34 @@ def show_crypto_manual_bot_page(usd_inr):
 def show_crypto_report_page(usd_inr):
     st.title("📑 Crypto PnL Report")
     ap = ENGINE.autopilot
+    st_autorefresh(interval=30_000, key="report_refresh")
     
-    total_profit = sum([t['pnl'] for t in ap['history']])
-    st.metric("Total Realized PnL", f"${total_profit:.2f}")
+    # 1. METRICS
+    total_profit = sum([t.get('pnl', 0) for t in ap['history']])
+    st.metric("💰 Total Realized PnL", f"${total_profit:,.2f}", help="Total profit from closed trades")
     
-    st.subheader("🏁 Closed Trades")
+    # 2. CHART (PnL Growth)
+    st.subheader("📈 Profit Growth")
     if ap["history"]:
         df = pd.DataFrame(ap["history"])
         df['date'] = pd.to_datetime(df['date'])
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        df = df.sort_values('date')
+        df['cumulative_pnl'] = df['pnl'].cumsum()
+        
+        fig = px.line(df, x='date', y='cumulative_pnl', markers=True, title="Cumulative PnL Over Time")
+        fig.update_layout(xaxis_title="Time", yaxis_title="Profit (USD)")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No closed trades yet.")
+        st.info("No closed trades to chart yet.")
+
+    # 3. DETAILED TABLE
+    st.subheader("📋 Trade History")
+    if ap["history"]:
+        df_display = pd.DataFrame(ap["history"])
+        df_display['date'] = pd.to_datetime(df_display['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        st.dataframe(df_display.sort_values('date', ascending=False), use_container_width=True)
+    else:
+        st.info("No history available.")
 
 # ---------------------------
 # MAIN EXECUTION
