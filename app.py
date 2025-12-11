@@ -34,6 +34,11 @@ except ImportError:
     CRYPTO_BOT_AVAILABLE = False
 
 # ---------------------------
+# HARDCODED CONFIG
+# ---------------------------
+HARDCODED_GEMINI_KEY = "AIzaSyC-JuxWDEu4L5oOG0n_d4riO9xhHguqekQ"
+
+# ---------------------------
 # PAGE CONFIG + GLOBAL STYLE
 # ---------------------------
 st.set_page_config(page_title="AI Crypto Trading", layout="wide", page_icon="📈")
@@ -59,7 +64,6 @@ def apply_custom_style():
         section[data-testid="stSidebar"] label { color: #ffffff !important; }
         
         /* --- EXPANDER & TABLE FIXES (WHITE THEME) --- */
-        /* Force Expander Header to be Light Grey */
         .main div[data-testid="stExpander"] details summary {
             background-color: #f0f2f6 !important;
             color: #000000 !important;
@@ -80,17 +84,6 @@ def apply_custom_style():
         .main div[data-testid="stExpander"] td {
             color: #000000 !important;
             background-color: #ffffff !important;
-        }
-        
-        /* --- DROPDOWN MENU FIX --- */
-        div[data-baseweb="select"] > div {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-            border: 1px solid #ced4da;
-        }
-        div[data-baseweb="popover"], div[data-baseweb="menu"], div[role="option"] {
-            background-color: #ffffff !important;
-            color: #000000 !important;
         }
         
         /* Metrics */
@@ -151,46 +144,50 @@ def get_usd_inr_rate():
     return 84.0 
 
 # ---------------------------
-# 🧠 GEMINI 3 INTELLIGENT ENGINE
+# 🧠 GEMINI 3 INTELLIGENT ENGINE (RESTRICTED)
 # ---------------------------
+def check_gemini_eligibility():
+    """Checks if Gemini API can be used (Limit: Once every 3 days)."""
+    last_use_str = st.session_state.get("last_gemini_usage", None)
+    if last_use_str is None: return True 
+    try:
+        last_use = dt.datetime.strptime(last_use_str, "%Y-%m-%d %H:%M:%S")
+        if (dt.datetime.now() - last_use).days >= 3: return True
+        return False
+    except: return True
+
 def gemini3_analysis(symbol, api_key):
-    """
-    Uses Google Gemini to analyze market data and output a trading decision.
-    """
-    if not GEMINI_AVAILABLE or not api_key:
-        return calculate_technical_score(symbol) # Fallback
+    """Uses Google Gemini to analyze market data."""
+    if not api_key: api_key = HARDCODED_GEMINI_KEY
+    if not GEMINI_AVAILABLE: return calculate_technical_score(symbol)
+    if not check_gemini_eligibility(): return calculate_technical_score(symbol)
 
     try:
-        # 1. Fetch Data
         hist = yf.Ticker(symbol).history(period="5d", interval="1d")
         if hist.empty: return 0, 0, "No Data"
         
         current_price = hist['Close'].iloc[-1]
         prices_str = ", ".join([f"${p:.2f}" for p in hist['Close'].tolist()])
         
-        # 2. Construct Prompt
         prompt = f"""
         You are an expert crypto trading AI (Gemini 3 Engine).
         Analyze {symbol}. Recent 5 daily closing prices: [{prices_str}].
         Current Price: ${current_price:.2f}.
-        
         Task: Provide a Trading Score from -10 (Strong Sell) to +10 (Strong Buy).
         Output STRICT JSON format only: {{"score": int, "reason": "short string"}}
         """
         
-        # 3. Call API
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
-        
-        # 4. Parse
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
-        return int(data.get("score", 0)), 50, f"Gemini: {data.get('reason', 'Analysis')}"
         
+        st.session_state["last_gemini_usage"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return int(data.get("score", 0)), 50, f"Gemini: {data.get('reason', 'Analysis')}"
     except Exception as e:
         print(f"Gemini Error: {e}")
-        return calculate_technical_score(symbol) # Fallback on error
+        return calculate_technical_score(symbol)
 
 def calculate_technical_score(symbol):
     """Fallback Standard Algo"""
@@ -244,7 +241,12 @@ if "autopilot" not in st.session_state:
         "last_tg_update": dt.datetime.now() - dt.timedelta(hours=5)
     }
 
-keys_to_init = ["binance_api", "binance_secret", "tg_token", "tg_chat_id", "gemini_api_key"]
+if "gemini_api_key" not in st.session_state: 
+    st.session_state["gemini_api_key"] = HARDCODED_GEMINI_KEY
+if "last_gemini_usage" not in st.session_state:
+    st.session_state["last_gemini_usage"] = None
+
+keys_to_init = ["binance_api", "binance_secret", "tg_token", "tg_chat_id"]
 for key in keys_to_init:
     if key not in st.session_state: st.session_state[key] = ""
 
@@ -263,7 +265,7 @@ def init_db():
 init_db()
 
 # ---------------------------
-# PAGE: MANUAL BOT (Restored)
+# PAGE: MANUAL BOT
 # ---------------------------
 def show_crypto_manual_bot_page():
     st.title("🤖 AI Crypto Manual Bot")
@@ -322,7 +324,7 @@ def show_crypto_manual_bot_page():
         tp_pct = col_e.number_input("TP (%)", value=st.session_state.get('auto_tp', 2.0))
         sl_pct = col_f.number_input("SL (%)", value=st.session_state.get('auto_sl', 3.0))
 
-    if st.button("▶ Start Manual Bot"):
+    if st.button("▶️ Start Manual Bot"):
         if curr_price > 0 and lower_p < upper_p:
             bot_id = selected_coin
             entry_qty = invest / curr_price
@@ -392,7 +394,7 @@ def show_crypto_manual_bot_page():
         st.error("Chart data unavailable.")
 
 # ---------------------------
-# PAGE: REPORT (Restored)
+# PAGE: REPORT
 # ---------------------------
 def show_crypto_report_page():
     st.title("📑 Crypto PnL Report")
@@ -444,8 +446,13 @@ def show_ai_autopilot_page():
     st.title(f"🚀 AI Auto-Pilot")
     
     # Engine Status Label
-    if gemini_key: st.caption("✨ Powered by Gemini 3 Intelligent Engine")
-    else: st.caption("⚙️ Running on Standard Technical Engine")
+    is_gemini_restricted = not check_gemini_eligibility()
+    if gemini_key and not is_gemini_restricted:
+        st.caption("✨ Powered by Gemini 3 Intelligent Engine")
+    elif is_gemini_restricted:
+        st.caption("⚙️ Gemini Engine Cooldown (Running Technical Backup)")
+    else:
+        st.caption("⚙️ Running on Standard Technical Engine")
 
     st_autorefresh(interval=20_000, key="autopilot_refresh") 
     
@@ -503,7 +510,7 @@ def show_ai_autopilot_page():
             pnl = curr_val - g['invest']
             pnl_pct = (pnl / g['invest']) * 100
             
-            # Use Gemini or Standard
+            # Use Gemini or Standard (Managed by function logic)
             score, _, reason = gemini3_analysis(g['coin'], gemini_key)
             
             close_trade = False
@@ -525,7 +532,7 @@ def show_ai_autopilot_page():
                 ap['active_grids'].pop(i)
         
         # ==========================================
-        # 2. AI JUDGE: ENTRY LOGIC
+        # 2. AI JUDGE: ENTRY LOGIC (INTELLIGENT ALGO UPGRADE)
         # ==========================================
         if ap['cash_balance'] > (ap['total_capital'] * 0.2): 
             best_score = -100; best_coin = None; best_reason = ""
@@ -533,7 +540,7 @@ def show_ai_autopilot_page():
             for coin in CRYPTO_SYMBOLS_USD:
                 if any(g['coin'] == coin for g in ap['active_grids']): continue
                 
-                # Analyze with Gemini 3
+                # Analyze with Gemini 3 (Managed by function logic)
                 score, _, reason = gemini3_analysis(coin, gemini_key)
                 
                 if score > best_score:
@@ -542,14 +549,35 @@ def show_ai_autopilot_page():
             if best_coin and best_score >= 5:
                 cp = get_current_price(best_coin)
                 if cp > 0:
+                    # 1. SMART ALLOCATION
                     alloc = 0.4 if best_score >= 8 else 0.2
                     invest_amt = min(ap['cash_balance'] * alloc, ap['cash_balance'] * 0.5)
-
-                    lower = cp * 0.95; upper = cp * 1.05
-                    tp_t = 3.0 if best_score >= 8 else 1.5; sl_t = 2.0
                     
+                    # 2. SMART VOLATILITY CHECK
+                    # Calculate volatilty to set ranges dynamically
+                    hist = get_safe_crypto_data(best_coin, period="5d")
+                    volatility_pct = 0.05 # Default 5%
+                    if hist is not None:
+                         # Avg daily range
+                         volatility_pct = ((hist['High'] - hist['Low']) / hist['Close']).mean()
+                         # Buffer volatility (x1.5 safety)
+                         volatility_pct = max(0.03, volatility_pct * 1.5)
+
+                    # 3. SMART GRID SETTINGS
+                    lower = cp * (1 - volatility_pct)
+                    upper = cp * (1 + volatility_pct)
+                    
+                    # TP/SL based on range
+                    tp_t = round(volatility_pct * 100 * 0.8, 2) # Target 80% of range
+                    sl_t = round(volatility_pct * 100 * 0.5, 2) # Stop at 50% of range
+                    
+                    # 4. SMART GRID COUNT
+                    # Ensure minimum ~$15 per grid line for safety
+                    safe_grid_count = int(invest_amt / 15)
+                    grid_count = max(3, min(10, safe_grid_count)) # Between 3 and 10 grids
+
                     grid_orders = []
-                    for lvl in np.linspace(lower, upper, 5):
+                    for lvl in np.linspace(lower, upper, grid_count):
                         if lvl < cp: grid_orders.append({"type": "BUY", "price": lvl, "status": "OPEN"})
                         else: grid_orders.append({"type": "SELL", "price": lvl, "status": "OPEN"})
 
@@ -557,7 +585,7 @@ def show_ai_autopilot_page():
                         "coin": best_coin, "entry": cp, 
                         "lower": lower, "upper": upper,
                         "qty": invest_amt/cp, "invest": invest_amt, 
-                        "grids": 5, "tp": tp_t, "sl": sl_t,
+                        "grids": grid_count, "tp": tp_t, "sl": sl_t,
                         "orders": grid_orders,
                         "ai_reason": best_reason,
                         "expected_profit": invest_amt * (tp_t/100),
@@ -626,10 +654,26 @@ def show_ai_autopilot_page():
                     if 'orders' in g and g['orders']:
                         ord_df = pd.DataFrame(g['orders'])
                         ord_df['price'] = ord_df['price'].apply(lambda x: f"${x:.4f}")
-                        # Table is now styled WHITE in CSS
                         st.dataframe(ord_df, use_container_width=True)
                     else:
                         st.write("Generating orders...")
+            
+            # --- NEW SUMMARY TABLE (ADDED PER REQUEST) ---
+            st.markdown("---")
+            st.markdown("### 📊 Active Trade Configurations")
+            config_data = []
+            for g in ap['active_grids']:
+                config_data.append({
+                    "Asset": g['coin'],
+                    "Lower Grid ($)": f"{g['lower']:.4f}",
+                    "Upper Grid ($)": f"{g['upper']:.4f}",
+                    "TP (%)": f"{g['tp']}%",
+                    "SL (%)": f"{g['sl']}%",
+                    "Total Grids": g.get('grids', 5),
+                    "Invested (INR)": f"₹{g['invest'] * usd_inr:,.2f}"
+                })
+            st.table(pd.DataFrame(config_data))
+            # ---------------------------------------------
         else:
             st.info("AI Scanner Active: Waiting for optimal setup...")
         
@@ -649,6 +693,10 @@ def main():
     st.sidebar.markdown("---")
     
     with st.sidebar.expander("🤖 Gemini AI Config"):
+        st.write("❓ Do you need help finding your Gemini API Key?")
+        if st.checkbox("Yes, show instructions"):
+            st.info("1. Go to Google AI Studio.\n2. Create a free API key.\n3. Paste it below.")
+        
         gemini_key = st.text_input("Gemini API Key", value=st.session_state.get("gemini_api_key", ""), type="password")
         if st.button("Save API Key"):
             st.session_state["gemini_api_key"] = gemini_key
@@ -673,5 +721,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
